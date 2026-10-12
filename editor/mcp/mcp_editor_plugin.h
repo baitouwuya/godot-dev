@@ -31,7 +31,7 @@
 #pragma once
 
 #include "core/mcp/mcp_discovery.h"
-#include "core/mcp/mcp_project_lease.h"
+#include "core/mcp/mcp_project_instance.h"
 #include "editor/mcp/mcp_builtin_features.h"
 #include "editor/mcp/mcp_host.h"
 #include "editor/mcp/mcp_http_health_probe.h"
@@ -53,21 +53,19 @@ class MCPEditorPlugin : public EditorPlugin, public MCPHostSessionObserver {
 	static inline bool requested = false;
 	static inline int requested_port = 0;
 	static inline MCPEditorPlugin *singleton = nullptr;
+	static inline MCPProjectInstance *editor_instance = nullptr;
 
 	StartupState startup_state = STARTUP_PENDING;
 	MCPToolRegistry tool_registry;
 	MCPBuiltinFeatures builtin_features;
 	MCPHost host;
 	MCPProjectHeartbeat project_heartbeat;
-	MCPHTTPProjectLeaseHealthProbe health_probe;
 	MCPProjectIdentity project_identity;
 	MCPProjectLease *project_lease = nullptr;
 	MCPDiscoveryRecord discovery_record;
 	String discovery_directory;
 	String auth_secret;
 	String last_start_error;
-	ConfirmationDialog *conflict_dialog = nullptr;
-	MCPDiscoveryRecord conflicting_owner;
 	bool runtime_input_debugger_registered = false;
 	bool runtime_observation_debugger_registered = false;
 
@@ -78,16 +76,11 @@ class MCPEditorPlugin : public EditorPlugin, public MCPHostSessionObserver {
 	void _stop_mcp();
 	Error _publish_discovery(String &r_error);
 	void _handle_start_error(Error p_error, const String &p_message);
-	void _show_conflict_dialog();
-	void _retry_after_conflict();
-	void _conflict_custom_action(const String &p_action);
-	void _exit_after_conflict();
 	void _exit_with_error(const String &p_message);
-	bool _is_headless() const;
 	void on_mcp_session_removed(const String &p_session_id) override;
 
 public:
-	static void configure(bool p_requested, int p_port = 0);
+	static void configure(bool p_requested, int p_port = 0, MCPProjectInstance *p_instance = nullptr);
 	static bool is_requested() { return requested; }
 	static MCPEditorPlugin *get_singleton() { return singleton; }
 

@@ -40,13 +40,10 @@
 #include "scene/main/scene_tree.h"
 #include "servers/display/display_server.h"
 
-void MCPEditorPlugin::configure(bool p_requested, int p_port) {
+void MCPEditorPlugin::configure(bool p_requested, int p_port, MCPProjectInstance *p_instance) {
 	requested = p_requested;
 	requested_port = p_port;
-}
-
-bool MCPEditorPlugin::_is_headless() const {
-	return !DisplayServer::get_singleton() || DisplayServer::get_singleton()->get_name() == "headless";
+	editor_instance = p_instance;
 }
 
 Error MCPEditorPlugin::_register_tools(String &r_error) {
@@ -77,23 +74,19 @@ Error MCPEditorPlugin::_publish_discovery(String &r_error) {
 
 Error MCPEditorPlugin::_start_mcp(String &r_error) {
 	r_error = String();
-	conflicting_owner = MCPDiscoveryRecord();
-
-	Error error = MCPProjectIdentity::create(ProjectSettings::get_singleton()->get_resource_path(), project_identity, &r_error);
-	if (error != OK) {
-		return error;
+	if (!editor_instance || !editor_instance->is_registered() || !editor_instance->get_host_lease() ||
+			!editor_instance->get_host_lease()->is_acquired()) {
+		r_error = "MCP editor ownership must be reserved before editor initialization.";
+		return ERR_UNCONFIGURED;
 	}
+	project_identity = editor_instance->get_identity();
+	project_lease = editor_instance->get_host_lease();
 	if (MCPProjectIdentity::generate_instance_id(auth_secret, &r_error) != OK) {
 		return ERR_CANT_CREATE;
 	}
-
-	project_lease = memnew(MCPProjectLease(project_identity, EditorPaths::get_singleton()->get_project_settings_dir()));
 	discovery_directory = EditorPaths::get_singleton()->get_data_dir().path_join("mcp/discovery");
 	discovery_record = MCPDiscoveryRecord::create(project_identity, "streamable-http", String(), MCPProtocol::PROTOCOL_VERSION_LATEST, auth_secret);
-	error = project_lease->acquire(discovery_record, health_probe, &conflicting_owner, &r_error);
-	if (error != OK) {
-		return error;
-	}
+	Error error;
 
 	error = _register_tools(r_error);
 	if (error != OK) {
@@ -117,7 +110,10 @@ Error MCPEditorPlugin::_start_mcp(String &r_error) {
 	builtin_features.configure_host(host.get_project_metadata());
 
 	discovery_record.endpoint = host.get_endpoint();
-	error = _publish_discovery(r_error);
+	error = editor_instance->update_host(discovery_record, &r_error);
+	if (error == OK) {
+		error = _publish_discovery(r_error);
+	}
 	if (error != OK) {
 		host.stop();
 		_unregister_tools();
@@ -171,10 +167,9 @@ void MCPEditorPlugin::_stop_mcp() {
 	if (!discovery_directory.is_empty() && project_identity.is_valid()) {
 		MCPDiscovery::remove_record(discovery_directory, project_identity.project_id, project_identity.instance_id);
 	}
-	if (project_lease) {
-		project_lease->release();
-		memdelete(project_lease);
-		project_lease = nullptr;
+	project_lease = nullptr; // Borrowed from the process-lifetime owner.
+	if (editor_instance) {
+		editor_instance->disable_mcp();
 	}
 	discovery_record = MCPDiscoveryRecord();
 	project_identity = MCPProjectIdentity();
@@ -184,55 +179,7 @@ void MCPEditorPlugin::_stop_mcp() {
 
 void MCPEditorPlugin::_handle_start_error(Error p_error, const String &p_message) {
 	last_start_error = p_message.is_empty() ? error_names[p_error] : p_message;
-	if (p_error == ERR_ALREADY_IN_USE) {
-		if (_is_headless()) {
-			_exit_with_error("Another MCP Host already owns this project. " + last_start_error);
-		} else {
-			startup_state = STARTUP_WAITING_FOR_CONFLICT;
-			_show_conflict_dialog();
-		}
-		return;
-	}
 	_exit_with_error("Unable to start Godot MCP Host: " + last_start_error);
-}
-
-void MCPEditorPlugin::_show_conflict_dialog() {
-	if (!conflict_dialog) {
-		conflict_dialog = memnew(ConfirmationDialog);
-		EditorNode::get_singleton()->get_gui_base()->add_child(conflict_dialog);
-		conflict_dialog->set_title(TTR("MCP Host Already Running"));
-		conflict_dialog->set_ok_button_text(TTR("Retry"));
-		conflict_dialog->set_cancel_button_text(TTR("Exit"));
-		conflict_dialog->add_button(TTR("Continue Without MCP"), true, "continue_without_mcp");
-		conflict_dialog->connect(SceneStringName(confirmed), callable_mp(this, &MCPEditorPlugin::_retry_after_conflict));
-		conflict_dialog->connect("custom_action", callable_mp(this, &MCPEditorPlugin::_conflict_custom_action));
-		conflict_dialog->connect("canceled", callable_mp(this, &MCPEditorPlugin::_exit_after_conflict));
-	}
-	const String owner_description = conflicting_owner.is_valid(false) ? vformat("PID: %d\nEndpoint: %s", conflicting_owner.pid, conflicting_owner.endpoint) : TTR("The current owner metadata is incomplete.");
-	conflict_dialog->set_text(vformat(TTR("This project already has an MCP Host. Close the owning Godot instance, then retry.\n\n%s"), owner_description));
-	conflict_dialog->popup_centered();
-}
-
-void MCPEditorPlugin::_retry_after_conflict() {
-	_stop_mcp();
-	startup_state = STARTUP_PENDING;
-}
-
-void MCPEditorPlugin::_conflict_custom_action(const String &p_action) {
-	if (p_action != "continue_without_mcp") {
-		return;
-	}
-	requested = false;
-	startup_state = STARTUP_DISABLED;
-	if (conflict_dialog) {
-		conflict_dialog->hide();
-	}
-	_stop_mcp();
-	set_process_internal(false);
-}
-
-void MCPEditorPlugin::_exit_after_conflict() {
-	_exit_with_error("Godot MCP Host startup was canceled because this project is already owned by another instance.");
 }
 
 void MCPEditorPlugin::_exit_with_error(const String &p_message) {

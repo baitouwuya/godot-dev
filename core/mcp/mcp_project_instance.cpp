@@ -111,7 +111,9 @@ Error MCPProjectInstance::register_editor(const String &p_project_path, bool p_r
 	MCPProjectLease arbitration(identity, get_arbitration_directory(identity));
 	// This lock covers both the presence check and publication. All cooperating
 	// ordinary and managed editors participate, so startup cannot race a GUI.
-	error = arbitration.acquire(presence, p_health_probe, r_conflicting_owner, r_error, p_now_unix_ms, p_process_probe);
+	MCPDiscoveryRecord registration_owner = presence;
+	registration_owner.transport = "editor-registration";
+	error = arbitration.acquire(registration_owner, p_health_probe, r_conflicting_owner, r_error, p_now_unix_ms, p_process_probe);
 	if (error != OK) {
 		return error;
 	}

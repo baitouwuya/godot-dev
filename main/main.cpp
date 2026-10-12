@@ -126,6 +126,7 @@
 #include "editor/file_system/editor_paths.h"
 #include "editor/gui/progress_dialog.h"
 #ifdef MCP_ENABLED
+#include "core/mcp/mcp_project_instance.h"
 #include "editor/mcp/mcp_editor_plugin.h"
 #endif
 #include "editor/project_manager/project_manager.h"
@@ -236,9 +237,11 @@ static bool wait_for_import = false;
 static bool restore_editor_window_layout = true;
 #ifdef MCP_ENABLED
 static bool mcp_editor_requested = false;
+static bool mcp_editor_start_rejected = false;
 static bool mcp_port_overridden = false;
 static int mcp_port = 0;
 static MCPCLIBootstrap *mcp_cli_bootstrap = nullptr;
+static MCPProjectInstance *mcp_editor_instance = nullptr;
 static String mcp_cli_project_path;
 static bool mcp_cli_explicit_project_path = false;
 
@@ -1083,7 +1086,12 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 		memdelete(mcp_cli_bootstrap);
 		mcp_cli_bootstrap = nullptr;
 	}
+	if (mcp_editor_instance) {
+		memdelete(mcp_editor_instance);
+		mcp_editor_instance = nullptr;
+	}
 	mcp_editor_requested = false;
+	mcp_editor_start_rejected = false;
 	mcp_port_overridden = false;
 	mcp_port = 0;
 	mcp_cli_project_path = String();
@@ -1715,6 +1723,7 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 #ifdef MCP_ENABLED
 		} else if (arg == "--mcp") {
 			mcp_editor_requested = true;
+			forwardable_cli_arguments[CLI_SCOPE_TOOL].push_back(arg);
 		} else if (arg == "--mcp-port") {
 			if (!N || !N->get().is_valid_int()) {
 				OS::get_singleton()->printerr("Missing or invalid <port> argument for --mcp-port <port>.\n");
@@ -1727,6 +1736,8 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 			}
 			mcp_port = (int)port;
 			mcp_port_overridden = true;
+			forwardable_cli_arguments[CLI_SCOPE_TOOL].push_back(arg);
+			forwardable_cli_arguments[CLI_SCOPE_TOOL].push_back(N->get());
 			N = N->next();
 		} else if (mcp_cli_bootstrap && mcp_cli_bootstrap->get_runtime().get_command_registry().has_command(arg)) {
 			String cli_error;
@@ -2324,6 +2335,41 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 		goto error;
 #endif
 	}
+
+#if defined(TOOLS_ENABLED) && defined(MCP_ENABLED)
+	if (editor && found_project && !project_manager) {
+		// This must precede EditorPaths, recovery locks, GUI construction,
+		// plugins, import scans, and the editor's opening project.godot save.
+		// Normal editors publish presence without implicitly enabling MCP.
+		mcp_editor_instance = memnew(MCPProjectInstance);
+		MCPHTTPProjectLeaseHealthProbe health_probe;
+		MCPDiscoveryRecord conflicting_owner;
+		String registration_error;
+		Error registration_result;
+		const uint64_t registration_deadline = OS::get_singleton()->get_ticks_usec() + 5000000;
+		do {
+			registration_result = mcp_editor_instance->register_editor(globals->get_resource_path(), mcp_editor_requested,
+					health_probe, &conflicting_owner, &registration_error);
+			if (registration_result != ERR_ALREADY_IN_USE || (!conflicting_owner.instance_id.is_empty() && conflicting_owner.transport != "editor-registration")) {
+				break;
+			}
+			OS::get_singleton()->delay_usec(10000);
+		} while (OS::get_singleton()->get_ticks_usec() < registration_deadline);
+		if (registration_result != OK) {
+			OS::get_singleton()->printerr("MCP editor startup: %s (owner PID %d).\n", registration_error.utf8().get_data(), conflicting_owner.pid);
+			if (mcp_editor_requested) {
+				mcp_editor_start_rejected = true;
+				OS::get_singleton()->set_exit_code(MCPCLI::EXIT_DISCOVERY_FAILED);
+				goto error;
+			}
+			// Preserve ordinary editor behavior on read-only projects. Its MCP
+			// integration remains disabled; registration failures are visible.
+			memdelete(mcp_editor_instance);
+			mcp_editor_instance = nullptr;
+		}
+		MCPEditorPlugin::configure(mcp_editor_requested, mcp_port, mcp_editor_instance);
+	}
+#endif
 
 	// Initialize WorkerThreadPool.
 	{
@@ -3185,8 +3231,22 @@ error:
 	}
 #endif
 
+#if defined(TOOLS_ENABLED) && defined(MCP_ENABLED)
+	if (mcp_editor_instance) {
+		memdelete(mcp_editor_instance);
+		mcp_editor_instance = nullptr;
+	}
+	MCPEditorPlugin::configure(false);
+#endif
+
 	if (editor) {
+#ifdef MCP_ENABLED
+		if (!mcp_editor_start_rejected) {
+			OS::get_singleton()->remove_lock_file();
+		}
+#else
 		OS::get_singleton()->remove_lock_file();
+#endif
 	}
 
 	EngineDebugger::deinitialize();
@@ -5506,6 +5566,16 @@ void Main::cleanup(bool p_force) {
 	message_queue->flush();
 
 	OS::get_singleton()->delete_main_loop();
+#if defined(TOOLS_ENABLED) && defined(MCP_ENABLED)
+	// The plugin has stopped its workers. Release before a requested restart
+	// creates the next editor, never on stdio-session teardown.
+	if (mcp_editor_instance) {
+		memdelete(mcp_editor_instance);
+		mcp_editor_instance = nullptr;
+	}
+	MCPEditorPlugin::configure(false);
+#endif
+
 
 	OS::get_singleton()->_cmdline.clear();
 	OS::get_singleton()->_user_args.clear();
