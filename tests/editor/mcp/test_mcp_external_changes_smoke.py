@@ -75,6 +75,12 @@ func _execute(command: Dictionary) -> void:
 			get_tree().root.propagate_notification(MainLoop.NOTIFICATION_APPLICATION_FOCUS_IN)
 		"open_scene":
 			EditorInterface.open_scene_from_path(command.path)
+		"assert_scene_state":
+			var root = EditorInterface.get_edited_scene_root()
+			if root == null or str(root.name) != command.root_name:
+				error = "The original scene root was not preserved"
+			elif not EditorInterface.get_unsaved_scenes().has(command.path):
+				error = "The original scene dirty state was not preserved"
 		"confirm", "resave", "cancel":
 			var dialogs: Array = []
 			_dialogs(get_tree().root, dialogs)
@@ -307,6 +313,21 @@ script="plugin.gd"
             require(
                 setting["value"] == "unsaved setting", "scene-only confirmation reloaded unrelated project settings"
             )
+            print("Checking corrupt-scene reload preserves every dirty tab", flush=True)
+            command("open_scene", path="res://first.tscn")
+            call("godot.node.rename", {"path": ".", "name": "DirtyFirst"})
+            command("open_scene", path="res://second.tscn")
+            call("godot.node.rename", {"path": ".", "name": "DirtySecond"})
+            external_write("first.tscn", first_scene.replace("First", "IncomingFirst"))
+            external_write("second.tscn", '[gd_scene format=3]\n[node name="broken')
+            require(
+                rows(command("focus"), "scene") == {"res://first.tscn", "res://second.tscn"},
+                "wrong corrupt-scene approval set",
+            )
+            command("confirm", scope="scene")
+            command("assert_scene_state", path="res://second.tscn", root_name="DirtySecond")
+            command("open_scene", path="res://first.tscn")
+            command("assert_scene_state", path="res://first.tscn", root_name="DirtyFirst")
             print(
                 "External-change integration smoke passed" + (" with GUI windows" if gui else " headlessly"), flush=True
             )

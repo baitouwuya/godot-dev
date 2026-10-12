@@ -1634,6 +1634,28 @@ void EditorNode::_reload_modified_scenes() {
 		return;
 	}
 	const Vector<EditorExternalChangeTracker::Change> changes = disk_changes.get_displayed();
+	// Validate every scene before removing any edited tab. A malformed or missing
+	// dependency must not destroy the user's unsaved scene while reporting failure.
+	Vector<Ref<PackedScene>> validated_scenes;
+	for (const EditorExternalChangeTracker::Change &change : changes) {
+		if (change.path == "res://project.godot") {
+			continue;
+		}
+		Error load_error = OK;
+		const Ref<PackedScene> scene = ResourceLoader::load(change.path, "PackedScene", ResourceFormatLoader::CACHE_MODE_IGNORE_DEEP, &load_error);
+		if (load_error != OK || scene.is_null() || !scene->can_instantiate()) {
+			_clear_external_changes();
+			show_warning(vformat(TTR("Could not reload scene '%s'. The open scenes and their unsaved changes have been kept."), change.path));
+			return;
+		}
+		validated_scenes.push_back(scene);
+	}
+	// Loading dependencies can process events; the approval must still describe
+	// exactly the same files and contents after the preflight.
+	if (!disk_changes.is_displayed_current(_collect_external_changes())) {
+		_scan_external_changes();
+		return;
+	}
 	_clear_external_changes();
 	const int current_idx = editor_data.get_edited_scene();
 	for (const EditorExternalChangeTracker::Change &change : changes) {
