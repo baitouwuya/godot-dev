@@ -51,8 +51,10 @@ jobs:
             cache-name: linux-editor-double-sanitizers
             target: editor
             # Debug symbols disabled as they're huge on this build and we hit the 14 GB limit for runners.
+            # Outline ASan checks to keep the full -O0 image within x86-64 PC-relative relocation limits.
             scons-flags: >-
               dev_build=yes
+              ccflags=--param=asan-instrumentation-with-call-threshold=0
               scu_build=yes
               debug_symbols=no
               precision=double
