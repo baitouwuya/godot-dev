@@ -28,6 +28,7 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
+#include "core/config/project_settings.h"
 #include "core/debugger/remote_debugger_peer.h"
 #include "core/io/marshalls.h"
 #include "core/io/stream_peer_socket.h"
@@ -118,7 +119,14 @@ public:
 		socket.instantiate();
 		stream.instantiate();
 		stream->accept_socket(socket, NetSocket::Address());
+		// The test runner does not initialize the runtime debugger settings.
+		ProjectSettings *settings = ProjectSettings::get_singleton();
+		const String setting = "network/limits/debugger/max_queued_messages";
+		const bool had_setting = settings->has_setting(setting);
+		const Variant previous = had_setting ? settings->get_setting(setting) : Variant();
+		settings->set_setting(setting, 4096);
 		peer = memnew(RemoteDebuggerPeerTCP(stream));
+		settings->set_setting(setting, previous);
 	}
 
 	Vector<uint8_t> receive_packet() {
