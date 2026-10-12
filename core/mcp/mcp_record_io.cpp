@@ -82,7 +82,7 @@ public:
 			return false;
 		}
 		token_info.resize(size);
-		const bool read_ok = GetTokenInformation(token, TokenUser, token_info.ptrw(), size, &size);
+		const bool read_ok = GetTokenInformation(token, TokenUser, token_info.ptrw(), size, &size) != FALSE;
 		CloseHandle(token);
 		if (!read_ok) {
 			return false;
@@ -124,7 +124,7 @@ public:
 			CloseHandle(directory);
 			return false;
 		}
-		const bool own_directory = EqualSid(owner, reinterpret_cast<TOKEN_USER *>(token_info.ptrw())->User.Sid);
+		const bool own_directory = EqualSid(owner, reinterpret_cast<TOKEN_USER *>(token_info.ptrw())->User.Sid) != FALSE;
 		LocalFree(existing);
 		const bool secured = own_directory && SetSecurityInfo(directory, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, acl, nullptr) == ERROR_SUCCESS;
 		CloseHandle(directory);
@@ -205,7 +205,7 @@ Error MCPRecordIO::write_atomic(const String &p_path, const String &p_text, Stri
 		return fail("Cannot create a private MCP record.", r_error, ERR_CANT_CREATE);
 	}
 	DWORD written = 0;
-	const bool stored = WriteFile(file, bytes.get_data(), bytes.length(), &written, nullptr) && written == DWORD(bytes.length()) && FlushFileBuffers(file);
+	const bool stored = WriteFile(file, bytes.get_data(), DWORD(bytes.length()), &written, nullptr) && written == DWORD(bytes.length()) && FlushFileBuffers(file);
 	CloseHandle(file);
 	if (!stored) {
 		DeleteFileW(reinterpret_cast<LPCWSTR>(temporary.get_data()));
@@ -278,14 +278,14 @@ Error MCPRecordIO::read(const String &p_path, uint64_t p_max_bytes, String &r_te
 		return fail("Cannot open MCP record.", r_error, GetLastError() == ERROR_FILE_NOT_FOUND ? ERR_FILE_NOT_FOUND : ERR_CANT_OPEN);
 	}
 	LARGE_INTEGER size;
-	if (!GetFileSizeEx(file, &size) || size.QuadPart < 0 || uint64_t(size.QuadPart) > p_max_bytes) {
+	if (!GetFileSizeEx(file, &size) || size.QuadPart < 0 || uint64_t(size.QuadPart) > p_max_bytes || uint64_t(size.QuadPart) > MAXDWORD) {
 		CloseHandle(file);
 		return fail("MCP record exceeds its size limit.", r_error, ERR_FILE_CORRUPT);
 	}
 	Vector<uint8_t> bytes;
 	bytes.resize(size.QuadPart);
 	DWORD read_bytes = 0;
-	const bool read_ok = ReadFile(file, bytes.ptrw(), bytes.size(), &read_bytes, nullptr) && read_bytes == DWORD(bytes.size());
+	const bool read_ok = ReadFile(file, bytes.ptrw(), DWORD(bytes.size()), &read_bytes, nullptr) && read_bytes == DWORD(bytes.size());
 	CloseHandle(file);
 	if (!read_ok) {
 		return fail("Cannot read complete MCP record.", r_error, ERR_FILE_CANT_READ);
