@@ -61,7 +61,9 @@ void MCPProjectHeartbeat::_run() {
 		updated_record.heartbeat_at_unix_ms = MCPDiscovery::get_current_unix_time_ms();
 		String error;
 		Error refresh_error = lease->refresh(updated_record, &error, updated_record.heartbeat_at_unix_ms);
-		if (refresh_error == ERR_UNAUTHORIZED || !lease->is_acquired()) {
+		// Storage permission errors can also be ERR_UNAUTHORIZED. Only the
+		// lease's explicit ownership check may fence this editor out.
+		if (!lease->is_acquired()) {
 			_set_status(STATUS_OWNERSHIP_LOST, error.is_empty() ? String(error_names[refresh_error]) : error);
 			running.clear();
 			return;
