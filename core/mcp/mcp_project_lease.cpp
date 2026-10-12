@@ -32,6 +32,7 @@
 
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
+#include "core/mcp/mcp_record_io.h"
 #include "core/os/os.h"
 
 namespace {
@@ -223,7 +224,7 @@ Error MCPProjectLease::acquire(const MCPDiscoveryRecord &p_owner, const MCPProje
 	const MCPProjectLeaseProcessProbe &process_probe = p_process_probe ? *p_process_probe : os_process_probe;
 
 	for (int attempt = 0; attempt < 2; attempt++) {
-		const Error lock_error = DirAccess::make_dir_absolute(lock_directory);
+		const Error lock_error = MCPRecordIO::make_private_directory(lock_directory);
 		if (lock_error == OK) {
 			const Error publish_error = _publish_owner(owner, r_error);
 			if (publish_error != OK) {

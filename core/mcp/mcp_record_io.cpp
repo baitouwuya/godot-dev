@@ -106,25 +106,59 @@ public:
 		return true;
 	}
 	bool protect_directory(const String &p_path) {
-		Char16String path = p_path.utf16();
-		LPWSTR native_path = reinterpret_cast<LPWSTR>(path.ptrw());
-		const DWORD flags = GetFileAttributesW(native_path);
-		if (flags == INVALID_FILE_ATTRIBUTES || !(flags & FILE_ATTRIBUTE_DIRECTORY) || (flags & FILE_ATTRIBUTE_REPARSE_POINT)) {
+		const Char16String path = p_path.utf16();
+		HANDLE directory = CreateFileW(reinterpret_cast<LPCWSTR>(path.get_data()), READ_CONTROL | WRITE_DAC,
+				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+				FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		if (directory == INVALID_HANDLE_VALUE) {
+			return false;
+		}
+		BY_HANDLE_FILE_INFORMATION info;
+		if (!GetFileInformationByHandle(directory, &info) || !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+			CloseHandle(directory);
 			return false;
 		}
 		PSID owner = nullptr;
 		PSECURITY_DESCRIPTOR existing = nullptr;
-		if (GetNamedSecurityInfoW(native_path, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, &owner, nullptr, nullptr, nullptr, &existing) != ERROR_SUCCESS) {
+		if (GetSecurityInfo(directory, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, &owner, nullptr, nullptr, nullptr, &existing) != ERROR_SUCCESS) {
+			CloseHandle(directory);
 			return false;
 		}
 		const bool own_directory = EqualSid(owner, reinterpret_cast<TOKEN_USER *>(token_info.ptrw())->User.Sid);
 		LocalFree(existing);
-		return own_directory && SetNamedSecurityInfoW(native_path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, acl, nullptr) == ERROR_SUCCESS;
+		const bool secured = own_directory && SetSecurityInfo(directory, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, acl, nullptr) == ERROR_SUCCESS;
+		CloseHandle(directory);
+		return secured;
 	}
 };
 #endif
 
 } // namespace
+
+Error MCPRecordIO::make_private_directory(const String &p_path) {
+	if (!p_path.is_absolute_path() || p_path.contains("://")) {
+		return ERR_INVALID_PARAMETER;
+	}
+#ifdef WINDOWS_ENABLED
+	PrivateSecurity security;
+	if (!security.initialize()) {
+		return ERR_UNAUTHORIZED;
+	}
+	const Char16String path = p_path.utf16();
+	if (CreateDirectoryW(reinterpret_cast<LPCWSTR>(path.get_data()), &security.attributes)) {
+		return OK;
+	}
+	return GetLastError() == ERROR_ALREADY_EXISTS ? ERR_ALREADY_EXISTS : ERR_CANT_CREATE;
+#elif defined(UNIX_ENABLED)
+	const CharString path = p_path.utf8();
+	if (mkdir(path.get_data(), 0700) == 0) {
+		return OK;
+	}
+	return errno == EEXIST ? ERR_ALREADY_EXISTS : ERR_CANT_CREATE;
+#else
+	return ERR_UNAVAILABLE;
+#endif
+}
 
 Error MCPRecordIO::write_atomic(const String &p_path, const String &p_text, String *r_error) {
 	if (r_error) {
@@ -143,9 +177,9 @@ Error MCPRecordIO::write_atomic(const String &p_path, const String &p_text, Stri
 	if (directory_error != OK && directory_error != ERR_ALREADY_EXISTS) {
 		return fail("Cannot create MCP record parent directory.", r_error, directory_error);
 	}
-	const Char16String directory_path = directory.utf16();
-	if (!CreateDirectoryW(reinterpret_cast<LPCWSTR>(directory_path.get_data()), &security.attributes) && GetLastError() != ERROR_ALREADY_EXISTS) {
-		return fail("Cannot create a private MCP record directory.", r_error, ERR_CANT_CREATE);
+	const Error create_error = make_private_directory(directory);
+	if (create_error != OK && create_error != ERR_ALREADY_EXISTS) {
+		return fail("Cannot create a private MCP record directory.", r_error, create_error);
 	}
 	if (!security.protect_directory(directory)) {
 		return fail("Cannot establish owner-only MCP record permissions.", r_error, ERR_UNAUTHORIZED);
