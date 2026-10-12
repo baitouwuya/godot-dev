@@ -58,6 +58,7 @@ class HostProcess:
         label: str,
         working_directory: Path,
         enable_mcp: bool = True,
+        headless: bool = True,
     ) -> None:
         self.project_path = project_path
         self.label = label
@@ -67,13 +68,10 @@ class HostProcess:
         self.stderr_path = working_directory / f".{log_stem}.stderr.log"
         self._stdout_writer = self.stdout_path.open("wb")
         self._stderr_writer = self.stderr_path.open("wb")
-        self.arguments = [
-            str(executable),
-            "--editor",
-            "--headless",
-            "--path",
-            str(project_path),
-        ]
+        self.arguments = [str(executable), "--editor"]
+        if headless:
+            self.arguments.append("--headless")
+        self.arguments.extend(["--path", str(project_path)])
         if enable_mcp:
             self.arguments.extend(["--mcp", "--mcp-port", "0"])
         try:

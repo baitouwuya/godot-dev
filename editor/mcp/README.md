@@ -6,49 +6,39 @@ Every advertised tool includes an object `outputSchema` and the standard MCP `re
 
 The implementation and extension boundaries are documented in [ARCHITECTURE.md](ARCHITECTURE.md). Contributors adding a Feature, Provider, service, or public tool should follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Start a Host
+## Start or Reuse a Project Host
 
-Start one editor Host for a project with an explicit project path:
+A Host belongs to the project editor process, not to an individual tool call or stdio client. Reuse it across operations. A tool completing, a bridge reaching EOF, or an MCP session ending does not close the editor or the running game.
+
+Explicitly start an editor with MCP enabled:
 
 ```powershell
 godot --editor --path C:\projects\my-game --mcp
 ```
 
-`--mcp` is valid only with `--editor` and an explicit `--path`. The Host binds to loopback and chooses an available port by default. Use `--mcp-port <port>` to request a fixed port; `--mcp-port 0` explicitly requests an ephemeral port.
+`--mcp` requires `--editor` and an explicit project-root `--path`. The Host binds to loopback and chooses an available port. `--mcp-port <port>` requests a fixed port; `0` requests an ephemeral port. The editor's ordinary **Reload Current Project** restart retains this explicit MCP intent and port.
 
-Only one MCP Host may own a canonical project path at a time. A second headless Host exits with an error. A graphical editor shows a conflict dialog that can retry, continue without MCP, or exit. Different projects may run Hosts at the same time.
+Managed MCP startup reserves project ownership before GUI initialization, plugins, import scans, or the opening `project.godot` save. If a cooperating editor already has the project open, another `--editor --mcp` process exits before those side effects. It never closes the original editor or offers to replace it. Different projects remain independent.
 
-Stopping the owning editor stops the Host and removes its discovery record. MCP startup is never implied by `--editor`, `--path`, or ordinary project execution.
+Ordinary editors from MCP-enabled builds register their presence without exposing MCP. Their normal multi-editor behavior is unchanged. If the existing editor has not enabled MCP, clients receive `MCP_DISABLED`; they do not launch a second editor or silently enable access. Review and save any work, then explicitly close/relaunch that project with `--mcp` if desired. Enabling MCP inside an already-running ordinary editor is not supported by this lifecycle interface. Older/non-MCP builds cannot publish this presence information.
 
 ## Discover a Project Host
-
-Use the project path to resolve the currently owning Host:
 
 ```powershell
 godot --mcp-discover --path C:\projects\my-game
 ```
 
-Successful stdout is exactly one JSON object:
+Discovery validates the private record and checks the endpoint's project and instance identity before reporting a reachable Host. Successful stdout remains exactly one JSON object:
 
 ```json
 {"projectId":"...","instanceId":"...","pid":1234,"endpoint":"http://127.0.0.1:32145/mcp","protocolVersion":"2025-11-25"}
 ```
 
-Discovery deliberately omits `authSecret` and the canonical project path. Diagnostics go to stderr. The command is terminal, forces headless drivers, cannot be combined with editor or project manager mode, and fails without an explicit `--path`.
+The output omits `authSecret` and the canonical project path. Diagnostics go to stderr. Discovery and stdio are terminal commands, force headless drivers for their own process, require an explicit `--path`, and cannot be combined with editor/project-manager mode.
 
-## Use the stdio Bridge
+## Use the Persistent stdio Bridge
 
-The stdio bridge lets a standard MCP client reach the project-specific Streamable HTTP Host without handling discovery records or bearer credentials:
-
-```powershell
-godot --mcp-stdio --path C:\projects\my-game
-```
-
-The bridge reads one JSON-RPC message per stdin line. Legacy `2025-03-26` sessions may use JSON-RPC batches; newer MCP protocol revisions do not support JSON-RPC batching. Use `godot.automation.batch` when an ordered tool batch is needed. The bridge resolves the selected project's current discovery record, adds the private bearer credential internally, forwards requests to that Host, and writes only JSON-RPC responses to stdout. Blank input lines are ignored and diagnostics use stderr.
-
-`--mcp-discover` and `--mcp-stdio` are the complete CLI adapter surface. Features such as logging, LSP queries, runtime input, performance recording, and Harness jobs are MCP tools served by the editor Host, including when a client reaches them through stdio.
-
-An MCP client configuration should keep the executable and arguments separate so paths with spaces remain intact:
+A standard MCP client should launch a bridge and keep its stdin open between requests:
 
 ```json
 {
@@ -57,18 +47,43 @@ An MCP client configuration should keep the executable and arguments separate so
 }
 ```
 
-Start the editor Host before starting the bridge. Each bridge is tied to the project named by its own `--path`; it does not route through whichever Godot editor happened to start first.
+The bridge reads one JSON-RPC message per line, resolves the selected project's Host, adds the private bearer credential internally, and writes JSON-RPC responses to stdout. It does not launch an editor by default. Blank lines are ignored; stderr contains diagnostics. Legacy `2025-03-26` sessions support JSON-RPC batches; newer revisions use `godot.automation.batch` for ordered tool batches.
 
-## Multiple Projects
+Both CLI adapters accept these closed lifecycle options after the command:
 
-Project routing is path-based:
+- `--connect-only`: the default. Attach to the existing MCP Host and never start an editor
+- `--allow-start`: explicitly permit one independent editor startup if no live registered editor or Host owns that project. Concurrent callers wait for the same startup; a timeout or transport failure never triggers another launch
+- `--wait-ms <0..120000>`: maximum startup/readiness wait, default `10000`. `0` disables startup waiting and is incompatible with `--allow-start`; checking an existing endpoint still has a bounded HTTP timeout
 
-1. Godot canonicalizes the explicit project directory and derives a stable project ID.
-2. Each running Host publishes an instance-specific endpoint under that project ID.
-3. `--mcp-discover` and `--mcp-stdio` resolve only the record matching their explicit project path.
-4. The per-project lease prevents a second Host from replacing a live owner, while unrelated project IDs remain independent.
+For example, when starting an editor is specifically intended:
 
-Do not cache one endpoint globally or reuse one project's bridge configuration for another project. Create one MCP client entry per project path. Restarting an editor creates a new instance ID, endpoint, and bearer credential, so clients should rediscover through the CLI.
+```powershell
+godot --mcp-stdio --path C:\projects\my-game --allow-start --wait-ms 30000
+```
+
+The explicitly started Host has its own lifetime. Ending the bridge does not stop it. The launcher does not inherit the bridge's standard streams; on Windows it must also escape a parent process Job. If that Job forbids independent startup, `LAUNCH_UNAVAILABLE` asks for an explicit editor launch instead of using a termination-bound fallback.
+
+`--restart` is deliberately rejected: the bridge cannot approve discarding unsaved work or closing an existing editor. Use the editor's explicit restart workflow. After a restart, create a new bridge so discovery obtains the new instance ID, endpoint and credential. Failed requests are never automatically replayed; a timed-out mutation may already have taken effect.
+
+A one-shot shell pipeline closes stdin after its messages, which also deletes that MCP session. That is suitable for isolated synchronous checks, but not for session-owned asynchronous jobs, held inputs or UI snapshots. Keep one bridge/session alive for those workflows; do not wrap each feature in an editor spawn/kill pair.
+
+`--mcp-discover` and `--mcp-stdio` remain the complete CLI adapter surface. All business features are MCP tools served by the persistent editor Host.
+
+## Multiple Projects and Lifecycle Diagnostics
+
+Routing uses the canonical project-root path, not the most recently opened editor. Use one MCP client entry per project. Do not cache one endpoint globally or reuse a project's bridge for another project.
+
+The early project registration and Host lease use a stable project-local directory independently of the configurable editor cache directory. Presence records contain no bearer credentials. Private discovery remains in the executable's editor data directory; portable/self-contained builds with different data directories may therefore need the matching binary/configuration to discover the existing Host.
+
+Common stderr diagnostic codes distinguish the next action:
+
+- `MCP_DISABLED`: an ordinary editor is already open; retain it and request explicit MCP enablement/restart
+- `ALREADY_RUNNING`, `HOST_STARTING`, `HOST_NOT_READY`: reuse or wait for the existing owner; do not start another editor
+- `HOST_NOT_RUNNING`: connect-only found no usable Host; starting requires explicit `--allow-start`
+- `OWNERSHIP_UNCERTAIN`, `DISCOVERY_INVALID`, `HOST_IDENTITY_MISMATCH`: inspect the reported metadata/environment problem without deleting locks or replacing the owner
+- `LAUNCH_UNAVAILABLE`, `LAUNCH_EXITED`: the one explicit startup failed; no blind relaunch is attempted
+
+When diagnosing process churn, compare the public discovery `pid` and `instanceId` across tool calls. The editor Host, stdio bridge, Windows console wrapper and running game are different processes; short-lived bridge or game processes do not by themselves mean that the editor restarted.
 
 ## Search Class Documentation
 
