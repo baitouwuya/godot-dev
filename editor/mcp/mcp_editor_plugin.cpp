@@ -179,7 +179,17 @@ void MCPEditorPlugin::_stop_mcp() {
 
 void MCPEditorPlugin::_handle_start_error(Error p_error, const String &p_message) {
 	last_start_error = p_message.is_empty() ? error_names[p_error] : p_message;
-	_exit_with_error("Unable to start Godot MCP Host: " + last_start_error);
+	if (_is_headless()) {
+		_exit_with_error("Unable to start Godot MCP Host: " + last_start_error);
+		return;
+	}
+	// Initialization has already reached the user's editor. Service startup
+	// failure must not discard buffers or close the GUI they are working in.
+	startup_state = STARTUP_DISABLED;
+	_stop_mcp();
+	set_process_internal(false);
+	ERR_PRINT("MCP is unavailable; the editor remains open: " + last_start_error);
+	EditorNode::get_singleton()->show_warning(TTR("MCP could not start. Your editor and unsaved changes remain open.") + "\n\n" + last_start_error);
 }
 
 void MCPEditorPlugin::_exit_with_error(const String &p_message) {
