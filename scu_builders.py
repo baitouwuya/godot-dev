@@ -444,6 +444,7 @@ def generate_scu_files(max_includes_per_scu, mcp_runtime_enabled=True):
             "/core/templates",
             "/core/threads",
             "/core/variant",
+            "/editor/doc",
             "/scene",
             "/servers",
             "/servers/rendering",

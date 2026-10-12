@@ -3081,6 +3081,10 @@ void EditorHelp::_gen_doc_thread(void *p_udata) {
 }
 
 void EditorHelp::_gen_extensions_docs() {
+	if (doc_generation_stopped) {
+		return;
+	}
+
 	doc->generate((DocTools::GENERATE_FLAG_SKIP_BASIC_TYPES | DocTools::GENERATE_FLAG_EXTENSION_CLASSES_ONLY));
 
 	// Append extra doc data, as it gets overridden by the generation step.
@@ -3093,6 +3097,11 @@ static void _load_script_doc_cache(bool p_changes) {
 }
 
 void EditorHelp::load_script_doc_cache() {
+	EditorFileSystem *filesystem = EditorFileSystem::get_singleton();
+	if (doc_generation_stopped || !filesystem || !filesystem->get_filesystem()) {
+		return;
+	}
+
 	if (!ProjectSettings::get_singleton()->is_project_loaded()) {
 		print_verbose("Skipping loading script doc cache since no project is open.");
 		return;
@@ -3110,9 +3119,9 @@ void EditorHelp::load_script_doc_cache() {
 		return;
 	}
 
-	if (EditorFileSystem::get_singleton()->is_scanning()) {
+	if (filesystem->is_scanning()) {
 		// This is assuming EditorFileSystem is performing first scan. We must wait until it is done.
-		EditorFileSystem::get_singleton()->connect(SNAME("sources_changed"), callable_mp_static(_load_script_doc_cache), CONNECT_ONE_SHOT);
+		filesystem->connect(SNAME("sources_changed"), callable_mp_static(_load_script_doc_cache), CONNECT_ONE_SHOT);
 		return;
 	}
 
@@ -3167,15 +3176,20 @@ static void _regenerate_script_doc_cache(bool p_changes) {
 }
 
 void EditorHelp::regenerate_script_doc_cache() {
-	if (EditorFileSystem::get_singleton()->is_scanning()) {
+	EditorFileSystem *filesystem = EditorFileSystem::get_singleton();
+	if (doc_generation_stopped || !filesystem || !filesystem->get_filesystem()) {
+		return;
+	}
+
+	if (filesystem->is_scanning()) {
 		// Wait until EditorFileSystem scanning is complete to use updated filesystem structure.
-		EditorFileSystem::get_singleton()->connect(SNAME("sources_changed"), callable_mp_static(_regenerate_script_doc_cache), CONNECT_ONE_SHOT);
+		filesystem->connect(SNAME("sources_changed"), callable_mp_static(_regenerate_script_doc_cache), CONNECT_ONE_SHOT);
 		return;
 	}
 
 	_wait_for_thread(worker_thread);
 	_wait_for_thread(loader_thread);
-	loader_thread.start(_regen_script_doc_thread, EditorFileSystem::get_singleton()->get_filesystem());
+	loader_thread.start(_regen_script_doc_thread, filesystem->get_filesystem());
 }
 
 // Runs on worker_thread since it writes to DocData.
@@ -3252,6 +3266,10 @@ void EditorHelp::save_script_doc_cache() {
 }
 
 void EditorHelp::generate_doc(bool p_use_cache, bool p_use_script_cache) {
+	if (doc_generation_stopped) {
+		return;
+	}
+
 	doc_generation_count++;
 	OS::get_singleton()->benchmark_begin_measure("EditorHelp", vformat("Generate Documentation (Run %d)", doc_generation_count));
 
@@ -3363,9 +3381,14 @@ void EditorHelp::update_doc() {
 }
 
 void EditorHelp::cleanup_doc() {
+	// Waiting for the worker does not cancel its deferred calls. Keep them from
+	// accessing editor singletons or starting another generation during shutdown.
+	doc_generation_stopped = true;
 	_wait_for_thread();
-	memdelete(doc);
-	doc = nullptr;
+	if (doc) {
+		memdelete(doc);
+		doc = nullptr;
+	}
 }
 
 Vector<Pair<String, int>> EditorHelp::get_sections() {

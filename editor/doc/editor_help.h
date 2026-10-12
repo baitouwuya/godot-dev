@@ -84,6 +84,7 @@ class EditorFileSystemDirectory;
 
 class EditorHelp : public VBoxContainer {
 	GDCLASS(EditorHelp, VBoxContainer);
+	friend struct EditorHelpTestAccess;
 
 	enum MethodType {
 		METHOD_TYPE_METHOD,
@@ -187,6 +188,8 @@ class EditorHelp : public VBoxContainer {
 	void _toggle_files_pressed();
 
 	inline static int doc_generation_count = 0;
+	// Only accessed on the main thread. Deferred callbacks may survive cleanup_doc().
+	inline static bool doc_generation_stopped = false;
 	inline static String doc_version_hash;
 	inline static Thread worker_thread;
 	inline static Thread loader_thread; // Only load scripts here to avoid deadlocking with main thread.
