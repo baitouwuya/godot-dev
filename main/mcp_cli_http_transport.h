@@ -31,6 +31,7 @@
 #pragma once
 
 #include "core/error/error_list.h"
+#include "core/mcp/mcp_discovery.h"
 #include "core/templates/vector.h"
 #include "core/variant/dictionary.h"
 #include "core/variant/typed_array.h"
@@ -46,7 +47,10 @@ public:
 	enum RequestMethod {
 		REQUEST_POST,
 		REQUEST_DELETE,
+		REQUEST_GET,
 	};
+
+	virtual Error check_host(const MCPDiscoveryRecord &p_record, uint64_t p_timeout_ms, String &r_error);
 
 	virtual Error request(
 			RequestMethod p_method,

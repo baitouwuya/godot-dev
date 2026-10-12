@@ -31,6 +31,7 @@
 #include "mcp_cli_http_transport.h"
 
 #include "core/io/http_client.h"
+#include "core/io/json.h"
 #include "core/io/stream_peer_tls.h"
 #include "core/os/os.h"
 
@@ -50,6 +51,35 @@ bool is_http_failure_status(HTTPClient::Status p_status) {
 }
 
 } // namespace
+
+Error MCPCLITransport::check_host(const MCPDiscoveryRecord &p_record, uint64_t p_timeout_ms, String &r_error) {
+	Vector<String> headers;
+	headers.push_back("Accept: application/json");
+	MCPCLIHTTPResponse response;
+	const Error error = request(REQUEST_GET, p_record.endpoint.trim_suffix("/mcp") + "/health", headers, String(),
+			p_timeout_ms, MCPDiscovery::MAX_RECORD_BYTES, response, r_error);
+	if (error != OK) {
+		return error;
+	}
+	if (response.status_code != HTTPClient::RESPONSE_OK) {
+		r_error = vformat("HOST_UNAVAILABLE: Health endpoint returned HTTP %d.", response.status_code);
+		return ERR_CANT_CONNECT;
+	}
+	String text;
+	JSON json;
+	if (text.append_utf8((const char *)response.body.ptr(), response.body.size()) != OK || json.parse(text) != OK ||
+			json.get_data().get_type() != Variant::DICTIONARY) {
+		r_error = "HOST_IDENTITY_MISMATCH: Health response is not a valid project identity.";
+		return ERR_INVALID_DATA;
+	}
+	const Dictionary health = json.get_data();
+	if (health.get("ok", false) != Variant(true) || health.get("projectId", String()) != p_record.project_id ||
+			health.get("instanceId", String()) != p_record.instance_id) {
+		r_error = "HOST_IDENTITY_MISMATCH: Health endpoint does not match the discovered editor instance.";
+		return ERR_INVALID_DATA;
+	}
+	return OK;
+}
 
 Error MCPHTTPCLITransport::parse_endpoint(
 		const String &p_endpoint,
@@ -163,6 +193,9 @@ Error MCPHTTPCLITransport::request(
 			break;
 		case REQUEST_DELETE:
 			http_method = HTTPClient::METHOD_DELETE;
+			break;
+		case REQUEST_GET:
+			http_method = HTTPClient::METHOD_GET;
 			break;
 		default:
 			r_error = "Unsupported MCP HTTP request method.";

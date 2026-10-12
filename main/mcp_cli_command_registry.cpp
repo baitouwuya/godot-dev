@@ -34,7 +34,7 @@ MCPCLICommandRegistry::MCPCLICommandRegistry() {
 	MCPCLICommandDefinition discover;
 	discover.name = MCP_CLI_COMMAND_DISCOVER;
 	discover.usage = "--mcp-discover --path <directory>";
-	discover.description = "Print the running MCP endpoint for a Godot project.";
+	discover.description = "Validate and print a project Host. Connect-only by default; options: --allow-start, --wait-ms <0..120000>.";
 	discover.flags = MCP_CLI_COMMAND_FLAG_REQUIRE_EXPLICIT_PROJECT_PATH |
 			MCP_CLI_COMMAND_FLAG_EXCLUSIVE_WITH_EDITOR |
 			MCP_CLI_COMMAND_FLAG_JSON_STDOUT |
@@ -45,7 +45,7 @@ MCPCLICommandRegistry::MCPCLICommandRegistry() {
 	MCPCLICommandDefinition stdio;
 	stdio.name = MCP_CLI_COMMAND_STDIO;
 	stdio.usage = "--mcp-stdio --path <directory>";
-	stdio.description = "Bridge newline-delimited MCP stdio to the project's HTTP endpoint.";
+	stdio.description = "Connect stdio to a persistent project Host. Options: --connect-only (default), --allow-start, --wait-ms <0..120000>.";
 	stdio.flags = discover.flags;
 	commands.push_back(stdio);
 }

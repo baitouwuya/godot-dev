@@ -2356,7 +2356,7 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 			OS::get_singleton()->delay_usec(10000);
 		} while (OS::get_singleton()->get_ticks_usec() < registration_deadline);
 		if (registration_result != OK) {
-			OS::get_singleton()->printerr("MCP editor startup: %s (owner PID %d).\n", registration_error.utf8().get_data(), conflicting_owner.pid);
+			OS::get_singleton()->printerr("MCP editor startup: %s (owner PID %lld).\n", registration_error.utf8().get_data(), (long long)conflicting_owner.pid);
 			if (mcp_editor_requested) {
 				mcp_editor_start_rejected = true;
 				OS::get_singleton()->set_exit_code(MCPCLI::EXIT_DISCOVERY_FAILED);

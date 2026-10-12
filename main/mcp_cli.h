@@ -34,6 +34,7 @@
 #include "core/variant/dictionary.h"
 #include "core/variant/typed_array.h"
 #include "main/mcp_cli_command_registry.h"
+#include "main/mcp_cli_editor_launcher.h"
 #include "main/mcp_cli_http_transport.h"
 #include "main/mcp_cli_stdio_io.h"
 
@@ -52,6 +53,8 @@ public:
 		uint64_t max_line_bytes = 1024 * 1024;
 		uint64_t max_response_bytes = 4 * 1024 * 1024;
 		uint64_t request_timeout_ms = 10000;
+		uint64_t startup_wait_ms = 10000;
+		bool allow_start = false;
 	};
 
 	static constexpr const char *COMMAND_DISCOVER = MCP_CLI_COMMAND_DISCOVER;
@@ -61,10 +64,13 @@ private:
 	Options options;
 	MCPHTTPCLITransport default_transport;
 	MCPOSCLIIO default_io;
+	MCPOSCLIEditorLauncher default_launcher;
 	MCPCLITransport *transport = nullptr;
 	MCPCLIIO *io = nullptr;
+	MCPCLIEditorLauncher *launcher = nullptr;
 
-	Error _get_project_path_argument(const PackedStringArray &p_arguments, String &r_project_path, String &r_error) const;
+	Error _get_project_path_argument(const PackedStringArray &p_arguments, String &r_project_path, String &r_error);
+	Error _resolve_ready_host(const String &p_project_path, MCPProjectIdentity &r_identity, MCPDiscoveryRecord &r_record, String &r_error);
 	Error _validate_discovery_record(
 			const MCPProjectIdentity &p_identity,
 			const MCPDiscoveryRecord &p_record,
@@ -73,7 +79,7 @@ private:
 
 public:
 	MCPCLI();
-	MCPCLI(const Options &p_options, MCPCLITransport *p_transport = nullptr, MCPCLIIO *p_io = nullptr);
+	MCPCLI(const Options &p_options, MCPCLITransport *p_transport = nullptr, MCPCLIIO *p_io = nullptr, MCPCLIEditorLauncher *p_launcher = nullptr);
 	MCPCLI(const MCPCLI &) = delete;
 	MCPCLI &operator=(const MCPCLI &) = delete;
 	MCPCLI(MCPCLI &&) = delete;

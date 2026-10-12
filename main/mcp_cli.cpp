@@ -31,6 +31,9 @@
 #include "mcp_cli.h"
 
 #include "core/io/json.h"
+#include "core/io/file_access.h"
+#include "core/mcp/mcp_project_instance.h"
+#include "core/os/os.h"
 #include "core/mcp/mcp_protocol.h"
 #include "main/mcp_cli_stdio_bridge.h"
 
@@ -49,11 +52,11 @@ void set_error(String *r_error, const String &p_error) {
 } // namespace
 
 MCPCLI::MCPCLI() :
-		transport(&default_transport), io(&default_io) {
+		transport(&default_transport), io(&default_io), launcher(&default_launcher) {
 }
 
-MCPCLI::MCPCLI(const Options &p_options, MCPCLITransport *p_transport, MCPCLIIO *p_io) :
-		options(p_options), transport(p_transport ? p_transport : &default_transport), io(p_io ? p_io : &default_io) {
+MCPCLI::MCPCLI(const Options &p_options, MCPCLITransport *p_transport, MCPCLIIO *p_io, MCPCLIEditorLauncher *p_launcher) :
+		options(p_options), transport(p_transport ? p_transport : &default_transport), io(p_io ? p_io : &default_io), launcher(p_launcher ? p_launcher : &default_launcher) {
 }
 
 String MCPCLI::get_default_discovery_directory() {
@@ -79,19 +82,50 @@ Dictionary MCPCLI::make_public_discovery_output(const MCPDiscoveryRecord &p_reco
 Error MCPCLI::_get_project_path_argument(
 		const PackedStringArray &p_arguments,
 		String &r_project_path,
-		String &r_error) const {
+		String &r_error) {
 	r_project_path = String();
 	r_error = String();
-	if (p_arguments.size() == 1 && !p_arguments[0].is_empty()) {
-		r_project_path = p_arguments[0];
-		return OK;
+	options.allow_start = false; // Launch permission never carries across CLI invocations.
+	bool mode_seen = false;
+	bool wait_seen = false;
+	for (int i = 0; i < p_arguments.size(); i++) {
+		const String &argument = p_arguments[i];
+		if (argument == "--connect-only" || argument == "--allow-start") {
+			if (mode_seen) {
+				r_error = "Choose exactly one of --connect-only and --allow-start.";
+				return ERR_INVALID_PARAMETER;
+			}
+			mode_seen = true;
+			options.allow_start = argument == "--allow-start";
+		} else if (argument == "--wait-ms") {
+			if (wait_seen || ++i >= p_arguments.size() || !p_arguments[i].is_valid_int() ||
+					p_arguments[i].to_int() < 0 || p_arguments[i].to_int() > 120000) {
+				r_error = "--wait-ms requires one integer from 0 to 120000.";
+				return ERR_INVALID_PARAMETER;
+			}
+			wait_seen = true;
+			options.startup_wait_ms = p_arguments[i].to_int();
+		} else if (argument == "--path") {
+			if (!r_project_path.is_empty() || ++i >= p_arguments.size() || p_arguments[i].is_empty()) {
+				r_error = "MCP CLI commands require one explicit project path.";
+				return ERR_INVALID_PARAMETER;
+			}
+			r_project_path = p_arguments[i];
+		} else if (argument == "--restart") {
+			r_error = "RESTART_REQUIRES_EDITOR: Restart through the existing editor after reviewing unsaved work. The bridge never closes an editor.";
+			return ERR_INVALID_PARAMETER;
+		} else if (!argument.is_empty() && !argument.begins_with("--") && r_project_path.is_empty()) {
+			r_project_path = argument;
+		} else {
+			r_error = "MCP CLI commands require one explicit project path and only --connect-only, --allow-start, or --wait-ms options.";
+			return ERR_INVALID_PARAMETER;
+		}
 	}
-	if (p_arguments.size() == 2 && p_arguments[0] == "--path" && !p_arguments[1].is_empty()) {
-		r_project_path = p_arguments[1];
-		return OK;
+	if (r_project_path.is_empty() || (options.allow_start && options.startup_wait_ms == 0)) {
+		r_error = "MCP CLI commands require one explicit project path; --allow-start also requires a positive --wait-ms.";
+		return ERR_INVALID_PARAMETER;
 	}
-	r_error = "MCP CLI commands require one explicit project path.";
-	return ERR_INVALID_PARAMETER;
+	return OK;
 }
 
 Error MCPCLI::_validate_discovery_record(
@@ -176,6 +210,109 @@ Error MCPCLI::resolve_discovery_record(
 	return error;
 }
 
+Error MCPCLI::_resolve_ready_host(const String &p_project_path, MCPProjectIdentity &r_identity, MCPDiscoveryRecord &r_record, String &r_error) {
+	Error error = MCPProjectIdentity::create(p_project_path, r_identity, &r_error);
+	if (error != OK) {
+		return error;
+	}
+	class NoHealth : public MCPProjectLeaseHealthProbe {
+	public:
+		bool is_healthy(const MCPDiscoveryRecord &) const override { return false; }
+	} no_health;
+	MCPProjectLease launch_guard(r_identity, MCPProjectInstance::get_launch_directory(r_identity));
+	bool launched = false;
+	bool observed_starting = false;
+	ProcessID launched_pid = 0;
+	const uint64_t deadline = OS::get_singleton()->get_ticks_usec() + options.startup_wait_ms * 1000;
+	while (true) {
+		MCPProjectIdentity lookup_identity;
+		error = resolve_discovery_record(p_project_path, lookup_identity, r_record, &r_error);
+		if (error != OK && error != ERR_FILE_NOT_FOUND && error != ERR_DOES_NOT_EXIST) {
+			r_error = "DISCOVERY_INVALID: " + r_error;
+			return error;
+		}
+		if (error == OK) {
+			const uint64_t now = OS::get_singleton()->get_ticks_usec();
+			const uint64_t remaining_ms = options.startup_wait_ms == 0 ? options.request_timeout_ms :
+					(now < deadline ? MAX((deadline - now) / 1000, (uint64_t)1) : 1);
+			const Error health_error = transport->check_host(r_record, MIN(options.request_timeout_ms, remaining_ms), r_error);
+			if (health_error == OK) {
+				return OK;
+			}
+			// Never turn a failed live/stale endpoint into permission to launch.
+			// Only a verified absent owner below can permit one explicit start.
+			error = health_error;
+		}
+		Vector<MCPDiscoveryRecord> running;
+		String presence_error;
+		const Error presence_result = MCPProjectInstance::list_running(r_identity, running, &presence_error);
+		if (presence_result != OK) {
+			r_error = "OWNERSHIP_UNCERTAIN: " + presence_error;
+			return presence_result;
+		}
+		for (const MCPDiscoveryRecord &instance : running) {
+			if (instance.transport == "editor") {
+				r_error = vformat("MCP_DISABLED: Editor PID %d already has this project open without MCP. Keep it open; enable MCP only through a user-approved restart.", instance.pid);
+				return ERR_UNCONFIGURED;
+			}
+		}
+		MCPProjectLease owner_lookup(r_identity);
+		MCPDiscoveryRecord owner;
+		const Error owner_result = owner_lookup.read_owner(owner);
+		const bool live_owner = owner_result == OK && OS::get_singleton()->is_process_running(owner.pid);
+		const bool live_record = r_record.is_valid(false) && OS::get_singleton()->is_process_running(r_record.pid);
+		if (!running.is_empty() || live_owner || live_record) {
+			observed_starting = true;
+			r_error = "HOST_NOT_READY: The existing project editor is starting, busy, or published in another discovery directory. No editor was relaunched.";
+		} else if (!launched && options.allow_start && !observed_starting) {
+			// Missing/corrupt owner metadata is not proof of absence. The early
+			// registration in the child is the final atomic ownership arbiter.
+			if (owner_result != OK && FileAccess::exists(owner_lookup.get_owner_file())) {
+				r_error = "OWNERSHIP_UNCERTAIN: The existing project lease metadata is unreadable.";
+				return ERR_INVALID_DATA;
+			}
+			if (!FileAccess::exists(r_identity.canonical_path.path_join("project.godot"))) {
+				r_error = "INVALID_PROJECT_ROOT: --path must name the directory containing project.godot.";
+				return ERR_DOES_NOT_EXIST;
+			}
+			if (!launch_guard.is_acquired()) {
+				MCPDiscoveryRecord guard_owner = MCPDiscoveryRecord::create(r_identity, "editor-launch", String(), MCPProtocol::PROTOCOL_VERSION_LATEST);
+				MCPDiscoveryRecord contender;
+				const Error guard_result = launch_guard.acquire(guard_owner, no_health, &contender, &r_error);
+				if (guard_result == OK) {
+					// Re-read after taking the launch lock. Another caller may have
+					// finished while this invocation was looking at old metadata.
+					continue;
+				}
+				if (guard_result != ERR_ALREADY_IN_USE) {
+					return guard_result;
+				}
+				observed_starting = true;
+				r_error = "HOST_STARTING: Another client is already starting this project. Waiting without launching another editor.";
+			} else {
+				const Error launch_error = launcher->launch(r_identity.canonical_path, launched_pid, r_error);
+				if (launch_error != OK) {
+					return launch_error;
+				}
+				launched = true;
+				_diagnose(vformat("ROLE=bridge STARTED_EDITOR pid=%d; editor lifetime is independent of this connection.", launched_pid));
+				r_error = "HOST_STARTING: Waiting for the explicitly started editor. It will not be closed or relaunched on timeout.";
+			}
+		} else if (!launched && !observed_starting) {
+			r_error = "HOST_NOT_RUNNING: No reachable MCP editor was found. Connect-only mode never starts an editor; use --allow-start only when starting one is intended.";
+			return ERR_DOES_NOT_EXIST;
+		}
+		if (launched && !launcher->is_running(launched_pid)) {
+			r_error = vformat("LAUNCH_EXITED: Editor PID %d exited before becoming ready. Start it explicitly to inspect startup errors; no automatic relaunch was attempted.", launched_pid);
+			return ERR_CANT_CREATE;
+		}
+		if (OS::get_singleton()->get_ticks_usec() >= deadline) {
+			return ERR_TIMEOUT;
+		}
+		OS::get_singleton()->delay_usec(25000);
+	}
+}
+
 void MCPCLI::_diagnose(const String &p_message) {
 	io->write_stderr_line("MCP CLI: " + p_message);
 }
@@ -184,7 +321,7 @@ int MCPCLI::run_discover(const String &p_project_path) {
 	MCPProjectIdentity identity;
 	MCPDiscoveryRecord record;
 	String error;
-	if (resolve_discovery_record(p_project_path, identity, record, &error) != OK) {
+	if (_resolve_ready_host(p_project_path, identity, record, error) != OK) {
 		_diagnose(error);
 		return EXIT_DISCOVERY_FAILED;
 	}
@@ -196,7 +333,7 @@ int MCPCLI::run_stdio_bridge(const String &p_project_path) {
 	MCPProjectIdentity identity;
 	MCPDiscoveryRecord record;
 	String error;
-	if (resolve_discovery_record(p_project_path, identity, record, &error) != OK) {
+	if (_resolve_ready_host(p_project_path, identity, record, error) != OK) {
 		_diagnose(error);
 		return EXIT_DISCOVERY_FAILED;
 	}

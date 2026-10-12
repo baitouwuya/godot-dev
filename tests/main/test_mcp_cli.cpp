@@ -33,7 +33,9 @@
 TEST_FORCE_LINK(test_mcp_cli);
 
 #include "core/io/dir_access.h"
+#include "core/io/file_access.h"
 #include "core/io/json.h"
+#include "core/mcp/mcp_project_instance.h"
 #include "core/mcp/mcp_protocol.h"
 #include "main/mcp_cli.h"
 #include "main/mcp_cli_runtime.h"
@@ -102,6 +104,14 @@ public:
 	int next_response = 0;
 	int fail_request_index = -1;
 	Error request_failure = ERR_UNAVAILABLE;
+	Error host_check_result = OK;
+	int host_check_count = 0;
+
+	Error check_host(const MCPDiscoveryRecord &, uint64_t, String &r_error) override {
+		host_check_count++;
+		r_error = host_check_result == OK ? String() : String("test host is unavailable");
+		return host_check_result;
+	}
 
 	Error request(
 			MCPCLITransport::RequestMethod p_method,
@@ -525,6 +535,167 @@ TEST_CASE("[MCP][CLI] Missing and invalid discovery records only report diagnost
 		CHECK_FALSE(io.stderr_lines.is_empty());
 		CHECK(transport.requests.is_empty());
 	}
+}
+
+class RecordingLauncher final : public MCPCLIEditorLauncher {
+public:
+	int calls = 0;
+	Error result = ERR_UNAVAILABLE;
+	String discovery_directory;
+	MCPDiscoveryRecord record;
+
+	Error launch(const String &, ProcessID &r_pid, String &r_error) override {
+		calls++;
+		if (result != OK) {
+			r_error = "LAUNCH_UNAVAILABLE: test launch failed";
+			return result;
+		}
+		r_pid = record.pid;
+		return MCPDiscovery::write_record(discovery_directory, record, true, &r_error);
+	}
+};
+
+class NoEditorHealth final : public MCPProjectLeaseHealthProbe {
+public:
+	bool is_healthy(const MCPDiscoveryRecord &) const override { return false; }
+};
+
+TEST_CASE("[MCP][CLI] Attach-first lifecycle never launches for a healthy, busy or ordinary editor") {
+	Error error = OK;
+	Ref<DirAccess> root = DirAccess::create_temp("mcp_cli_attach", false, &error);
+	REQUIRE(error == OK);
+	MCPProjectIdentity identity;
+	MCPDiscoveryRecord record;
+	String project_path;
+	String discovery_directory;
+	create_project_and_record(root, "http://127.0.0.1:35900/mcp", identity, record, project_path, discovery_directory);
+	MCPCLI::Options options;
+	options.discovery_directory = discovery_directory;
+	options.startup_wait_ms = 0;
+	options.allow_start = true;
+	RecordingLauncher launcher;
+	MemoryCLIIO io;
+	QueueCLITransport transport;
+
+	SUBCASE("Healthy Host is attached") {
+		REQUIRE(MCPDiscovery::write_record(discovery_directory, record, true) == OK);
+		MCPCLI cli(options, &transport, &io, &launcher);
+		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_OK);
+		CHECK(transport.host_check_count == 1);
+		CHECK(launcher.calls == 0);
+	}
+	SUBCASE("Live but unresponsive Host is never replaced") {
+		REQUIRE(MCPDiscovery::write_record(discovery_directory, record, true) == OK);
+		transport.host_check_result = ERR_TIMEOUT;
+		MCPCLI cli(options, &transport, &io, &launcher);
+		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
+		CHECK(launcher.calls == 0);
+		REQUIRE(io.stderr_lines.size() == 1);
+		CHECK(io.stderr_lines[0].contains("HOST_NOT_READY"));
+	}
+	SUBCASE("Ordinary editor is retained with MCP disabled") {
+		NoEditorHealth health;
+		MCPProjectInstance instance;
+		REQUIRE(instance.register_editor(project_path, false, health) == OK);
+		MCPCLI cli(options, &transport, &io, &launcher);
+		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
+		CHECK(launcher.calls == 0);
+		CHECK(instance.is_registered());
+		REQUIRE(io.stderr_lines.size() == 1);
+		CHECK(io.stderr_lines[0].contains("MCP_DISABLED"));
+	}
+}
+
+TEST_CASE("[MCP][CLI] Explicit start launches once and concurrent callers do not launch competitors") {
+	Error error = OK;
+	Ref<DirAccess> root = DirAccess::create_temp("mcp_cli_launch", false, &error);
+	REQUIRE(error == OK);
+	MCPProjectIdentity identity;
+	MCPDiscoveryRecord record;
+	String project_path;
+	String discovery_directory;
+	create_project_and_record(root, "http://127.0.0.1:35901/mcp", identity, record, project_path, discovery_directory);
+	Ref<FileAccess> project = FileAccess::open(project_path.path_join("project.godot"), FileAccess::WRITE);
+	REQUIRE(project.is_valid());
+	project->store_string("config_version=5\n");
+	project->close();
+	MCPCLI::Options options;
+	options.discovery_directory = discovery_directory;
+	options.startup_wait_ms = 100;
+	options.allow_start = true;
+	RecordingLauncher launcher;
+	launcher.result = OK;
+	launcher.record = record;
+	launcher.discovery_directory = discovery_directory;
+	MemoryCLIIO io;
+	QueueCLITransport transport;
+
+	SUBCASE("Explicit absent-project startup happens once") {
+		MCPCLI cli(options, &transport, &io, &launcher);
+		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_OK);
+		CHECK(launcher.calls == 1);
+		CHECK(transport.host_check_count == 1);
+	}
+	SUBCASE("Connect-only never launches") {
+		options.allow_start = false;
+		MCPCLI cli(options, &transport, &io, &launcher);
+		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
+		CHECK(launcher.calls == 0);
+	}
+	SUBCASE("Another client's launch reservation is awaited without spawning") {
+		NoEditorHealth health;
+		MCPProjectLease guard(identity, MCPProjectInstance::get_launch_directory(identity));
+		REQUIRE(guard.acquire(record, health) == OK);
+		options.startup_wait_ms = 1;
+		MCPCLI cli(options, &transport, &io, &launcher);
+		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
+		CHECK(launcher.calls == 0);
+		CHECK(guard.is_acquired());
+	}
+	SUBCASE("Failed launch is not retried") {
+		launcher.result = ERR_CANT_FORK;
+		MCPCLI cli(options, &transport, &io, &launcher);
+		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
+		CHECK(launcher.calls == 1);
+	}
+}
+
+TEST_CASE("[MCP][CLI] Lifecycle flags are closed and cannot restart an editor") {
+	MemoryCLIIO io;
+	QueueCLITransport transport;
+	RecordingLauncher launcher;
+	MCPCLI cli(MCPCLI::Options(), &transport, &io, &launcher);
+	const Vector<PackedStringArray> invalid{
+		{ "/project", "--allow-start", "--connect-only" },
+		{ "/project", "--allow-start", "--allow-start" },
+		{ "/project", "--restart" },
+		{ "/project", "--wait-ms", "-1" },
+		{ "/project", "--wait-ms", "120001" },
+		{ "/project", "--wait-ms", "abc" },
+		{ "/project", "--allow-start", "--wait-ms", "0" },
+		{ "/project", "--wait-ms" },
+	};
+	for (const PackedStringArray &arguments : invalid) {
+		CHECK(cli.execute_cli_command(MCPCLI::COMMAND_STDIO, arguments) == MCPCLI::EXIT_INVALID_ARGUMENTS);
+	}
+	CHECK(launcher.calls == 0);
+	CHECK(transport.requests.is_empty());
+}
+
+TEST_CASE("[MCP][CLI] Health verification rejects a stale endpoint with another instance") {
+	QueueCLITransport transport;
+	MCPDiscoveryRecord record;
+	record.project_id = "requested-project";
+	record.instance_id = "requested-instance";
+	record.endpoint = "http://127.0.0.1:35902/mcp";
+	transport.responses.push_back(make_response(200, R"({"ok":true,"projectId":"requested-project","instanceId":"another-instance"})"));
+	String error;
+	CHECK(transport.MCPCLITransport::check_host(record, 100, error) == ERR_INVALID_DATA);
+	CHECK(error.contains("HOST_IDENTITY_MISMATCH"));
+	REQUIRE(transport.requests.size() == 1);
+	CHECK(transport.requests[0].method == MCPCLITransport::REQUEST_GET);
+	CHECK(transport.requests[0].endpoint == "http://127.0.0.1:35902/health");
+	CHECK(find_request_header(transport.requests[0].headers, "authorization").is_empty());
 }
 
 } // namespace TestMCPCLI
