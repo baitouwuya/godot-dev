@@ -537,12 +537,19 @@ TEST_CASE("[MCP][CLI] Missing and invalid discovery records only report diagnost
 	}
 }
 
+class LiveProcessProbe final : public MCPProjectLeaseProcessProbe {
+public:
+	bool is_process_running(ProcessID) const override { return true; }
+};
+
 class RecordingLauncher final : public MCPCLIEditorLauncher {
 public:
 	int calls = 0;
 	Error result = ERR_UNAVAILABLE;
 	String discovery_directory;
 	MCPDiscoveryRecord record;
+
+	bool is_running(ProcessID) const override { return true; }
 
 	Error launch(const String &, ProcessID &r_pid, String &r_error) override {
 		calls++;
@@ -574,12 +581,13 @@ TEST_CASE("[MCP][CLI] Attach-first lifecycle never launches for a healthy, busy 
 	options.startup_wait_ms = 0;
 	options.allow_start = true;
 	RecordingLauncher launcher;
+	LiveProcessProbe process_probe;
 	MemoryCLIIO io;
 	QueueCLITransport transport;
 
 	SUBCASE("Healthy Host is attached") {
 		REQUIRE(MCPDiscovery::write_record(discovery_directory, record, true) == OK);
-		MCPCLI cli(options, &transport, &io, &launcher);
+		MCPCLI cli(options, &transport, &io, &launcher, &process_probe);
 		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_OK);
 		CHECK(transport.host_check_count == 1);
 		CHECK(launcher.calls == 0);
@@ -587,7 +595,7 @@ TEST_CASE("[MCP][CLI] Attach-first lifecycle never launches for a healthy, busy 
 	SUBCASE("Live but unresponsive Host is never replaced") {
 		REQUIRE(MCPDiscovery::write_record(discovery_directory, record, true) == OK);
 		transport.host_check_result = ERR_TIMEOUT;
-		MCPCLI cli(options, &transport, &io, &launcher);
+		MCPCLI cli(options, &transport, &io, &launcher, &process_probe);
 		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
 		CHECK(launcher.calls == 0);
 		REQUIRE(io.stderr_lines.size() == 1);
@@ -597,7 +605,7 @@ TEST_CASE("[MCP][CLI] Attach-first lifecycle never launches for a healthy, busy 
 		NoEditorHealth health;
 		MCPProjectInstance instance;
 		REQUIRE(instance.register_editor(project_path, false, health) == OK);
-		MCPCLI cli(options, &transport, &io, &launcher);
+		MCPCLI cli(options, &transport, &io, &launcher, &process_probe);
 		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
 		CHECK(launcher.calls == 0);
 		CHECK(instance.is_registered());
@@ -624,6 +632,7 @@ TEST_CASE("[MCP][CLI] Explicit start launches once and concurrent callers do not
 	options.startup_wait_ms = 100;
 	options.allow_start = true;
 	RecordingLauncher launcher;
+	LiveProcessProbe process_probe;
 	launcher.result = OK;
 	launcher.record = record;
 	launcher.discovery_directory = discovery_directory;
@@ -631,14 +640,14 @@ TEST_CASE("[MCP][CLI] Explicit start launches once and concurrent callers do not
 	QueueCLITransport transport;
 
 	SUBCASE("Explicit absent-project startup happens once") {
-		MCPCLI cli(options, &transport, &io, &launcher);
+		MCPCLI cli(options, &transport, &io, &launcher, &process_probe);
 		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_OK);
 		CHECK(launcher.calls == 1);
 		CHECK(transport.host_check_count == 1);
 	}
 	SUBCASE("Connect-only never launches") {
 		options.allow_start = false;
-		MCPCLI cli(options, &transport, &io, &launcher);
+		MCPCLI cli(options, &transport, &io, &launcher, &process_probe);
 		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
 		CHECK(launcher.calls == 0);
 	}
@@ -647,14 +656,14 @@ TEST_CASE("[MCP][CLI] Explicit start launches once and concurrent callers do not
 		MCPProjectLease guard(identity, MCPProjectInstance::get_launch_directory(identity));
 		REQUIRE(guard.acquire(record, health) == OK);
 		options.startup_wait_ms = 1;
-		MCPCLI cli(options, &transport, &io, &launcher);
+		MCPCLI cli(options, &transport, &io, &launcher, &process_probe);
 		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
 		CHECK(launcher.calls == 0);
 		CHECK(guard.is_acquired());
 	}
 	SUBCASE("Failed launch is not retried") {
 		launcher.result = ERR_CANT_FORK;
-		MCPCLI cli(options, &transport, &io, &launcher);
+		MCPCLI cli(options, &transport, &io, &launcher, &process_probe);
 		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
 		CHECK(launcher.calls == 1);
 	}
@@ -664,7 +673,8 @@ TEST_CASE("[MCP][CLI] Lifecycle flags are closed and cannot restart an editor") 
 	MemoryCLIIO io;
 	QueueCLITransport transport;
 	RecordingLauncher launcher;
-	MCPCLI cli(MCPCLI::Options(), &transport, &io, &launcher);
+	LiveProcessProbe process_probe;
+	MCPCLI cli(MCPCLI::Options(), &transport, &io, &launcher, &process_probe);
 	const Vector<PackedStringArray> invalid{
 		{ "/project", "--allow-start", "--connect-only" },
 		{ "/project", "--allow-start", "--allow-start" },

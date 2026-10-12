@@ -52,11 +52,11 @@ void set_error(String *r_error, const String &p_error) {
 } // namespace
 
 MCPCLI::MCPCLI() :
-		transport(&default_transport), io(&default_io), launcher(&default_launcher) {
+		transport(&default_transport), io(&default_io), launcher(&default_launcher), process_probe(&default_process_probe) {
 }
 
-MCPCLI::MCPCLI(const Options &p_options, MCPCLITransport *p_transport, MCPCLIIO *p_io, MCPCLIEditorLauncher *p_launcher) :
-		options(p_options), transport(p_transport ? p_transport : &default_transport), io(p_io ? p_io : &default_io), launcher(p_launcher ? p_launcher : &default_launcher) {
+MCPCLI::MCPCLI(const Options &p_options, MCPCLITransport *p_transport, MCPCLIIO *p_io, MCPCLIEditorLauncher *p_launcher, const MCPProjectLeaseProcessProbe *p_process_probe) :
+		options(p_options), transport(p_transport ? p_transport : &default_transport), io(p_io ? p_io : &default_io), launcher(p_launcher ? p_launcher : &default_launcher), process_probe(p_process_probe ? p_process_probe : &default_process_probe) {
 }
 
 String MCPCLI::get_default_discovery_directory() {
@@ -245,7 +245,7 @@ Error MCPCLI::_resolve_ready_host(const String &p_project_path, MCPProjectIdenti
 		}
 		Vector<MCPDiscoveryRecord> running;
 		String presence_error;
-		const Error presence_result = MCPProjectInstance::list_running(r_identity, running, &presence_error);
+		const Error presence_result = MCPProjectInstance::list_running(r_identity, running, &presence_error, process_probe);
 		if (presence_result != OK) {
 			r_error = "OWNERSHIP_UNCERTAIN: " + presence_error;
 			return presence_result;
@@ -259,8 +259,8 @@ Error MCPCLI::_resolve_ready_host(const String &p_project_path, MCPProjectIdenti
 		MCPProjectLease owner_lookup(r_identity);
 		MCPDiscoveryRecord owner;
 		const Error owner_result = owner_lookup.read_owner(owner);
-		const bool live_owner = owner_result == OK && OS::get_singleton()->is_process_running(owner.pid);
-		const bool live_record = r_record.is_valid(false) && OS::get_singleton()->is_process_running(r_record.pid);
+		const bool live_owner = owner_result == OK && process_probe->is_process_running(owner.pid);
+		const bool live_record = r_record.is_valid(false) && process_probe->is_process_running(r_record.pid);
 		if (!running.is_empty() || live_owner || live_record) {
 			observed_starting = true;
 			r_error = "HOST_NOT_READY: The existing project editor is starting, busy, or published in another discovery directory. No editor was relaunched.";
@@ -278,7 +278,7 @@ Error MCPCLI::_resolve_ready_host(const String &p_project_path, MCPProjectIdenti
 			if (!launch_guard.is_acquired()) {
 				MCPDiscoveryRecord guard_owner = MCPDiscoveryRecord::create(r_identity, "editor-launch", String(), MCPProtocol::PROTOCOL_VERSION_LATEST);
 				MCPDiscoveryRecord contender;
-				const Error guard_result = launch_guard.acquire(guard_owner, no_health, &contender, &r_error);
+				const Error guard_result = launch_guard.acquire(guard_owner, no_health, &contender, &r_error, 0, process_probe);
 				if (guard_result == OK) {
 					// Re-read after taking the launch lock. Another caller may have
 					// finished while this invocation was looking at old metadata.
