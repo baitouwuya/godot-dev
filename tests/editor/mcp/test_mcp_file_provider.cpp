@@ -60,6 +60,19 @@ public:
 	}
 };
 
+static MCPFileProvider::ManagedDocument _find_test_document(const String &p_resource_path) {
+	if (p_resource_path == "res://open.gd") {
+		return MCPFileProvider::DOCUMENT_SCRIPT;
+	}
+	if (p_resource_path == "res://open.txt") {
+		return MCPFileProvider::DOCUMENT_TEXT;
+	}
+	if (p_resource_path == "res://open.tscn") {
+		return MCPFileProvider::DOCUMENT_SCENE;
+	}
+	return MCPFileProvider::DOCUMENT_NONE;
+}
+
 TEST_CASE("[MCP][Provider] File create is UTF-8 safe and overwrite-aware") {
 	REQUIRE(OS::get_singleton() != nullptr);
 	Error temp_error = OK;
@@ -153,6 +166,99 @@ TEST_CASE("[MCP][Provider] File create contract parses arguments consistently") 
 	CHECK_FALSE(MCPFileToolUtils::parse_create_options(arguments, options, error_message));
 }
 
+TEST_CASE("[MCP][Provider] File overwrite skips byte-identical UTF-8 content") {
+	Error temp_error = OK;
+	Ref<DirAccess> temporary_directory = DirAccess::create_temp("mcp_file_identical", false, &temp_error);
+	REQUIRE(temp_error == OK);
+	REQUIRE(temporary_directory.is_valid());
+	const String project_root = temporary_directory->get_current_dir();
+	const String absolute_path = project_root.path_join("same.txt");
+	MCPFileProvider *provider = memnew(MCPFileProvider(project_root));
+
+	const String contents[] = { "", "hello " + String::chr(0x4E16) + "\r\n", String::chr(0xFEFF) + "hello\n" };
+	for (const String &content : contents) {
+		Dictionary arguments;
+		arguments["path"] = "res://same.txt";
+		arguments["content"] = content;
+		arguments["overwrite"] = true;
+		REQUIRE_FALSE(bool(provider->create_file(arguments, Dictionary()).get("isError", false)));
+		const uint64_t modified_time = FileAccess::get_modified_time(absolute_path);
+
+		const Dictionary result = provider->create_file(arguments, Dictionary());
+		REQUIRE_FALSE(bool(result.get("isError", false)));
+		const Dictionary structured = result.get("structuredContent", Dictionary());
+		CHECK(int(structured.get("bytesWritten", -1)) == 0);
+		CHECK_FALSE(bool(structured.get("overwritten", true)));
+		CHECK(FileAccess::get_modified_time(absolute_path) == modified_time);
+	}
+
+	// A BOM or CRLF difference is a real byte change, even if decoded text is similar.
+	Dictionary arguments;
+	arguments["path"] = "res://same.txt";
+	arguments["content"] = "hello\n";
+	arguments["overwrite"] = true;
+	Dictionary result = provider->create_file(arguments, Dictionary());
+	REQUIRE_FALSE(bool(result.get("isError", false)));
+	Dictionary structured = result.get("structuredContent", Dictionary());
+	CHECK(int(structured.get("bytesWritten", 0)) == 6);
+	CHECK(bool(structured.get("overwritten", false)));
+	arguments["content"] = "hello\r\n";
+	result = provider->create_file(arguments, Dictionary());
+	REQUIRE_FALSE(bool(result.get("isError", false)));
+	structured = result.get("structuredContent", Dictionary());
+	CHECK(int(structured.get("bytesWritten", 0)) == 7);
+	CHECK(bool(structured.get("overwritten", false)));
+	CHECK(FileAccess::get_file_as_bytes(absolute_path) == String("hello\r\n").to_utf8_buffer());
+	memdelete(provider);
+}
+
+TEST_CASE("[MCP][Provider] File create protects open documents before identical-content checks") {
+	Error temp_error = OK;
+	Ref<DirAccess> temporary_directory = DirAccess::create_temp("mcp_file_managed", false, &temp_error);
+	REQUIRE(temp_error == OK);
+	REQUIRE(temporary_directory.is_valid());
+	const String project_root = temporary_directory->get_current_dir();
+	MCPFileProvider *provider = memnew(MCPFileProvider(project_root, _find_test_document));
+	const String paths[] = { "res://open.gd", "res://open.txt", "res://open.tscn" };
+	const String guidance[] = { "godot.script.save", "native Script editor", "godot.scene.save" };
+	for (int i = 0; i < 3; i++) {
+		const String absolute_path = project_root.path_join(paths[i].trim_prefix("res://"));
+		Ref<FileAccess> file = FileAccess::open(absolute_path, FileAccess::WRITE);
+		REQUIRE(file.is_valid());
+		REQUIRE(file->store_string("disk content"));
+		file.unref();
+		const uint64_t modified_time = FileAccess::get_modified_time(absolute_path);
+		Dictionary arguments;
+		arguments["path"] = paths[i];
+		arguments["overwrite"] = true;
+		const String replacements[] = { "different content", "disk content" };
+		for (const String &replacement : replacements) {
+			arguments["content"] = replacement;
+			const Dictionary result = provider->create_file(arguments, Dictionary());
+			REQUIRE(bool(result.get("isError", false)));
+			const Dictionary error = Dictionary(result.get("structuredContent", Dictionary())).get("error", Dictionary());
+			CHECK(error.get("code", String()) == "FILE_MANAGED");
+			CHECK(String(error.get("message", String())).contains(guidance[i]));
+			CHECK(FileAccess::get_file_as_string(absolute_path) == "disk content");
+			CHECK(FileAccess::get_modified_time(absolute_path) == modified_time);
+		}
+
+		// A deleted disk file can still have a dirty or externally changed editor buffer.
+		REQUIRE(DirAccess::remove_absolute(absolute_path) == OK);
+		arguments["overwrite"] = false;
+		const Dictionary result = provider->create_file(arguments, Dictionary());
+		CHECK(bool(result.get("isError", false)));
+		CHECK_FALSE(FileAccess::exists(absolute_path));
+	}
+
+	Dictionary arguments;
+	arguments["path"] = "res://closed.txt";
+	arguments["content"] = "new file";
+	CHECK_FALSE(bool(provider->create_file(arguments, Dictionary()).get("isError", false)));
+	CHECK(FileAccess::get_file_as_string(project_root.path_join("closed.txt")) == "new file");
+	memdelete(provider);
+}
+
 TEST_CASE("[MCP][Provider] File create rejects traversal and malformed arguments before writing") {
 	MCPToolRegistry registry;
 	MCPFileProvider *provider = memnew(MCPFileProvider);
@@ -227,6 +333,37 @@ TEST_CASE("[MCP][Provider] File create keeps project.godot under project tool co
 
 	provider->unregister_tools();
 	memdelete(provider);
+}
+
+TEST_CASE("[MCP][Provider] File create cannot overwrite project.godot through a directory alias") {
+	Error temp_error = OK;
+	Ref<DirAccess> temporary_directory = DirAccess::create_temp("mcp_file_project_alias", false, &temp_error);
+	REQUIRE(temp_error == OK);
+	REQUIRE(temporary_directory.is_valid());
+	REQUIRE(temporary_directory->make_dir("project") == OK);
+	const String project_root = temporary_directory->get_current_dir().path_join("project");
+	const String alias_path = project_root.path_join("alias");
+	if (temporary_directory->create_link(project_root, alias_path) != OK) {
+		return;
+	}
+	const String project_file = project_root.path_join("project.godot");
+	Ref<FileAccess> file = FileAccess::open(project_file, FileAccess::WRITE);
+	REQUIRE(file.is_valid());
+	REQUIRE(file->store_string("original project settings"));
+	file.unref();
+
+	MCPFileProvider *provider = memnew(MCPFileProvider(project_root));
+	Dictionary arguments;
+	arguments["path"] = "res://alias/project.godot";
+	arguments["content"] = "replacement";
+	arguments["overwrite"] = true;
+	const Dictionary result = provider->create_file(arguments, Dictionary());
+	CHECK(bool(result.get("isError", false)));
+	const Dictionary error = Dictionary(result.get("structuredContent", Dictionary())).get("error", Dictionary());
+	CHECK(error.get("code", String()) == "PROJECT_FILE_MANAGED");
+	CHECK(FileAccess::get_file_as_string(project_file) == "original project settings");
+	memdelete(provider);
+	CHECK(DirAccess::remove_absolute(alias_path) == OK);
 }
 
 } // namespace TestMCPFileProvider

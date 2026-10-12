@@ -36,6 +36,7 @@
 #include "core/io/resource_loader.h"
 #include "core/io/resource_saver.h"
 #include "core/mcp/mcp_tool_registry.h"
+#include "core/object/script_language.h"
 #include "core/os/os.h"
 #include "editor/file_system/editor_file_system.h"
 #include "editor/import/resource_importer_csv_translation.h"
@@ -43,8 +44,11 @@
 #include "editor/mcp/providers/mcp_resource_provider.h"
 #include "editor/mcp/providers/mcp_variant_codec.h"
 #include "scene/resources/gradient.h"
+#include "scene/resources/packed_scene.h"
 #include "scene/resources/texture.h"
 #include "tests/test_macros.h"
+
+#include "modules/modules_enabled.gen.h"
 
 TEST_FORCE_LINK(test_mcp_resource_provider);
 
@@ -526,6 +530,69 @@ TEST_CASE("[MCP][Provider] Resource properties use the cache until explicit save
 	provider->unregister_tools();
 	memdelete(provider);
 }
+
+TEST_CASE("[MCP][Provider] Resource save redirects scenes without writing cached edits") {
+	TestPaths paths = _make_test_paths();
+	REQUIRE(paths.temporary_directory.is_valid());
+	const String resource_path = "res://managed.tscn";
+	const String absolute_path = paths.project_root.path_join("managed.tscn");
+	const String original_content = "[gd_scene format=3]\n\n[node name=\"Original\" type=\"Node\"]\n";
+	REQUIRE(_write_text(absolute_path, original_content) == OK);
+	const Ref<PackedScene> scene = ResourceLoader::load(absolute_path);
+	REQUIRE(scene.is_valid());
+	scene->set_name("Unsaved scene resource");
+	const uint64_t modified_time = FileAccess::get_modified_time(absolute_path);
+
+	MCPToolRegistry registry;
+	MCPResourceProvider *provider = memnew(MCPResourceProvider(paths.project_root));
+	REQUIRE(provider->register_tools(&registry) == OK);
+	MCPToolCallContext context;
+	Dictionary arguments;
+	arguments["path"] = resource_path;
+	const MCPToolRegistry::CallResult result = registry.call_tool("godot.resource.save", arguments, context);
+	REQUIRE(result.status == MCPToolRegistry::CALL_OK);
+	CHECK(_error_code(result) == "RESOURCE_SAVE_MANAGED");
+	const Dictionary error = Dictionary(result.result.get("structuredContent", Dictionary())).get("error", Dictionary());
+	CHECK(String(error.get("message", String())).contains("godot.scene.save"));
+	CHECK(FileAccess::get_file_as_string(absolute_path) == original_content);
+	CHECK(FileAccess::get_modified_time(absolute_path) == modified_time);
+	CHECK(scene->get_name() == "Unsaved scene resource");
+	provider->unregister_tools();
+	memdelete(provider);
+}
+
+#ifdef MODULE_GDSCRIPT_ENABLED
+TEST_CASE("[MCP][Provider] Resource save redirects scripts without writing cached source") {
+	TestPaths paths = _make_test_paths();
+	REQUIRE(paths.temporary_directory.is_valid());
+	const String resource_path = "res://managed.gd";
+	const String absolute_path = paths.project_root.path_join("managed.gd");
+	const String original_content = "extends Node\nvar value = 1\n";
+	const String unsaved_content = "extends Node\nvar value = 2\n";
+	REQUIRE(_write_text(absolute_path, original_content) == OK);
+	const Ref<Script> script = ResourceLoader::load(absolute_path);
+	REQUIRE(script.is_valid());
+	script->set_source_code(unsaved_content);
+	const uint64_t modified_time = FileAccess::get_modified_time(absolute_path);
+
+	MCPToolRegistry registry;
+	MCPResourceProvider *provider = memnew(MCPResourceProvider(paths.project_root));
+	REQUIRE(provider->register_tools(&registry) == OK);
+	MCPToolCallContext context;
+	Dictionary arguments;
+	arguments["path"] = resource_path;
+	const MCPToolRegistry::CallResult result = registry.call_tool("godot.resource.save", arguments, context);
+	REQUIRE(result.status == MCPToolRegistry::CALL_OK);
+	CHECK(_error_code(result) == "RESOURCE_SAVE_MANAGED");
+	const Dictionary error = Dictionary(result.result.get("structuredContent", Dictionary())).get("error", Dictionary());
+	CHECK(String(error.get("message", String())).contains("godot.script.save"));
+	CHECK(FileAccess::get_file_as_string(absolute_path) == original_content);
+	CHECK(FileAccess::get_modified_time(absolute_path) == modified_time);
+	CHECK(script->get_source_code() == unsaved_content);
+	provider->unregister_tools();
+	memdelete(provider);
+}
+#endif
 
 TEST_CASE("[MCP][Provider] Editor resource preview clears its singleton after destruction") {
 	REQUIRE(EditorResourcePreview::get_singleton() == nullptr);

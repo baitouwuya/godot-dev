@@ -33,6 +33,7 @@
 #include "core/io/file_access.h"
 #include "core/io/resource_loader.h"
 #include "core/io/resource_saver.h"
+#include "core/object/script_language.h"
 #include "editor/editor_interface.h"
 #include "editor/editor_node.h"
 #include "editor/editor_undo_redo_manager.h"
@@ -40,6 +41,7 @@
 #include "editor/mcp/providers/mcp_path_utils.h"
 #include "editor/mcp/providers/mcp_tool_utils.h"
 #include "editor/mcp/providers/mcp_variant_codec.h"
+#include "scene/resources/packed_scene.h"
 
 MCPResourceEditService::MCPResourceEditService(const String &p_project_root) :
 		project_root(p_project_root) {
@@ -203,6 +205,14 @@ Dictionary MCPResourceEditService::save(const Dictionary &p_arguments) {
 	const Dictionary load_error = _load(p_arguments, selection);
 	if (!load_error.is_empty()) {
 		return load_error;
+	}
+	// Script buffers and scene tabs own their native save/reload bookkeeping. A
+	// ResourceSaver write here would bypass it, even for an otherwise clean tab.
+	if (Object::cast_to<Script>(selection.resource.ptr())) {
+		return MCPToolUtils::make_error_result("RESOURCE_SAVE_MANAGED", "Use godot.script.save for GDScript, or the native Script editor for other script languages.");
+	}
+	if (Object::cast_to<PackedScene>(selection.resource.ptr())) {
+		return MCPToolUtils::make_error_result("RESOURCE_SAVE_MANAGED", "Use godot.scene.save to save scenes through the native editor.");
 	}
 	const String save_path = project_root.is_empty() ? selection.resource_path : selection.absolute_path;
 	const Error error = ResourceSaver::save(selection.resource, save_path);

@@ -38,7 +38,15 @@ class MCPToolRegistry;
 
 class MCPFileProvider : public Object, public MCPEditorFeature {
 public:
-	explicit MCPFileProvider(const String &p_project_root = String());
+	enum ManagedDocument {
+		DOCUMENT_NONE,
+		DOCUMENT_SCRIPT,
+		DOCUMENT_TEXT,
+		DOCUMENT_SCENE,
+	};
+	using ManagedDocumentLookup = ManagedDocument (*)(const String &p_resource_path);
+
+	explicit MCPFileProvider(const String &p_project_root = String(), ManagedDocumentLookup p_document_lookup = nullptr);
 	~MCPFileProvider();
 
 	Error register_tools(MCPToolRegistry *p_registry, String *r_error = nullptr) override;
@@ -49,4 +57,5 @@ public:
 private:
 	MCPToolRegistry *tool_registry = nullptr;
 	String project_root;
+	ManagedDocumentLookup document_lookup = nullptr;
 };
