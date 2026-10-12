@@ -55,6 +55,22 @@ TEST_CASE("[MCP][RecordIO] Absent directories and absent files both mean no reco
 	CHECK(MCPRecordIO::read(directory.path_join("record.json"), 1024, text) == ERR_FILE_NOT_FOUND);
 }
 
+TEST_CASE("[MCP][RecordIO] Nested coordination directories are created privately") {
+	Error error = OK;
+	Ref<DirAccess> temporary = DirAccess::create_temp("mcp_record_nested", false, &error);
+	REQUIRE(error == OK);
+	const String first = temporary->get_current_dir().path_join("instances");
+	const String nested = first.path_join("launch/state");
+	REQUIRE(MCPRecordIO::ensure_private_directory(nested) == OK);
+	CHECK(MCPRecordIO::ensure_private_directory(nested) == OK);
+	CHECK(MCPRecordIO::make_private_directory(nested) == ERR_ALREADY_EXISTS);
+#ifdef UNIX_ENABLED
+	CHECK(FileAccess::get_unix_permissions(first) == 0700);
+	CHECK(FileAccess::get_unix_permissions(first.path_join("launch")) == 0700);
+	CHECK(FileAccess::get_unix_permissions(nested) == 0700);
+#endif
+}
+
 #ifdef WINDOWS_ENABLED
 class ScopedReadHandle {
 	HANDLE handle = INVALID_HANDLE_VALUE;

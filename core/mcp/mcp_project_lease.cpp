@@ -249,7 +249,7 @@ Error MCPProjectLease::acquire(const MCPDiscoveryRecord &p_owner, const MCPProje
 		return ERR_INVALID_DATA;
 	}
 
-	const Error state_directory_error = DirAccess::make_dir_recursive_absolute(project_state_directory);
+	const Error state_directory_error = MCPRecordIO::ensure_private_directory(project_state_directory);
 	if (state_directory_error != OK && state_directory_error != ERR_ALREADY_EXISTS) {
 		set_error(r_error, vformat("Cannot create MCP project state directory '%s'.", project_state_directory));
 		return state_directory_error;

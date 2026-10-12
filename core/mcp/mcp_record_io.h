@@ -39,6 +39,9 @@ namespace MCPRecordIO {
 // Creates only the final directory with a private descriptor; preserves atomic
 // ERR_ALREADY_EXISTS semantics required by lease acquisition.
 Error make_private_directory(const String &p_path);
+// Existing ancestors retain their permissions; every newly created directory
+// uses the same private owner/ACL as a leaf record directory.
+Error ensure_private_directory(const String &p_path);
 Error write_atomic(const String &p_path, const String &p_text, String *r_error = nullptr);
 Error read(const String &p_path, uint64_t p_max_bytes, String &r_text, String *r_error = nullptr);
 } // namespace MCPRecordIO

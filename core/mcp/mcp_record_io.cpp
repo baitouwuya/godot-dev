@@ -160,6 +160,28 @@ Error MCPRecordIO::make_private_directory(const String &p_path) {
 #endif
 }
 
+Error MCPRecordIO::ensure_private_directory(const String &p_path) {
+	if (!p_path.is_absolute_path() || p_path.contains("://")) {
+		return ERR_INVALID_PARAMETER;
+	}
+	if (DirAccess::dir_exists_absolute(p_path)) {
+		return OK;
+	}
+	const String parent = p_path.get_base_dir();
+	if (parent.is_empty() || parent == p_path) {
+		return ERR_CANT_CREATE;
+	}
+	const Error parent_error = ensure_private_directory(parent);
+	if (parent_error != OK) {
+		return parent_error;
+	}
+	const Error error = make_private_directory(p_path);
+	if (error == ERR_ALREADY_EXISTS && DirAccess::dir_exists_absolute(p_path)) {
+		return OK;
+	}
+	return error;
+}
+
 Error MCPRecordIO::write_atomic(const String &p_path, const String &p_text, String *r_error) {
 	if (r_error) {
 		*r_error = String();
@@ -173,7 +195,7 @@ Error MCPRecordIO::write_atomic(const String &p_path, const String &p_text, Stri
 	if (!security.initialize()) {
 		return fail("Cannot initialize private MCP record permissions.", r_error, ERR_UNAUTHORIZED);
 	}
-	const Error directory_error = DirAccess::make_dir_recursive_absolute(directory.get_base_dir());
+	const Error directory_error = ensure_private_directory(directory.get_base_dir());
 	if (directory_error != OK && directory_error != ERR_ALREADY_EXISTS) {
 		return fail("Cannot create MCP record parent directory.", r_error, directory_error);
 	}
@@ -185,7 +207,7 @@ Error MCPRecordIO::write_atomic(const String &p_path, const String &p_text, Stri
 		return fail("Cannot establish owner-only MCP record permissions.", r_error, ERR_UNAUTHORIZED);
 	}
 #else
-	const Error directory_error = DirAccess::make_dir_recursive_absolute(directory);
+	const Error directory_error = ensure_private_directory(directory);
 	if (directory_error != OK && directory_error != ERR_ALREADY_EXISTS) {
 		return fail("Cannot create MCP record directory.", r_error, directory_error);
 	}
