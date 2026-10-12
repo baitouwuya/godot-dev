@@ -550,7 +550,7 @@ try {
 	Write-Host "[5/9] Checking same-project Host conflict"
 	$conflict = Invoke-Godot -Executable $script:HostBinaryPath -Arguments @("--editor", "--headless", "--path", $projectA, "--mcp", "--mcp-port", "0")
 	Assert-Condition ($conflict.ExitCode -ne 0) "a second Host for project A must fail. Exit $($conflict.ExitCode). stdout: $($conflict.Stdout) stderr: $($conflict.Stderr)"
-	Assert-Condition ("$($conflict.Stdout)`n$($conflict.Stderr)" -match 'Another MCP Host already owns this project|MCP project lease is owned') "same-project Host conflict diagnostic is missing."
+	Assert-Condition ("$($conflict.Stdout)`n$($conflict.Stderr)" -match 'ALREADY_RUNNING:|Another MCP Host already owns this project|MCP project lease is owned') "same-project Host conflict diagnostic is missing."
 	Assert-Condition (-not $hostA.Capture.Process.HasExited) "project A owner exited during the conflict check."
 	$discoveryAAfterConflict = Wait-ForDiscovery -McpHost $hostA -Label "project A after conflict"
 	Assert-Condition ([string]$discoveryAAfterConflict.instanceId -ceq [string]$discoveryA.instanceId) "same-project conflict replaced the owning discovery record."

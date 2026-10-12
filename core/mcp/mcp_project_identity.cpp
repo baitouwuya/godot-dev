@@ -30,8 +30,8 @@
 
 #include "mcp_project_identity.h"
 
-#include "core/crypto/crypto_core.h"
 #include "core/io/dir_access.h"
+#include "core/os/os.h"
 #include "core/templates/hash_set.h"
 #include "core/templates/vector.h"
 
@@ -200,11 +200,11 @@ Error MCPProjectIdentity::generate_instance_id(String &r_instance_id, String *r_
 	set_error(r_error, String());
 
 	uint8_t random_bytes[INSTANCE_ID_BYTES];
-	CryptoCore::RandomGenerator random;
-	Error error = random.init();
-	if (error == OK) {
-		error = random.get_random_bytes(random_bytes, INSTANCE_ID_BYTES);
-	}
+	// Early editor arbitration precedes MODULE_INITIALIZATION_LEVEL_CORE,
+	// including mbedTLS's custom mutex setup. Use the already initialized OS
+	// cryptographic entropy source directly; never downgrade to pseudo-random
+	// IDs or defer admission until after editor/project side effects.
+	const Error error = OS::get_singleton()->get_entropy(random_bytes, INSTANCE_ID_BYTES);
 	if (error != OK) {
 		set_error(r_error, "Cannot generate a cryptographically random MCP instance ID.");
 		return error;

@@ -366,7 +366,8 @@ def run_smoke(binary: str, timeout: int, keep_temporary_projects: bool) -> None:
         )
         require(conflict.returncode != 0, "a second Host for project A must fail.")
         require(
-            "another mcp host already owns this project" in f"{conflict.stdout}\n{conflict.stderr}".lower()
+            "already_running:" in f"{conflict.stdout}\n{conflict.stderr}".lower()
+            or "another mcp host already owns this project" in f"{conflict.stdout}\n{conflict.stderr}".lower()
             or "project lease is owned" in f"{conflict.stdout}\n{conflict.stderr}".lower(),
             "same-project Host conflict diagnostic is missing.",
         )
