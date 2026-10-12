@@ -59,6 +59,9 @@ Error fail(const String &p_message, String *r_error, Error p_error) {
 }
 
 #ifdef WINDOWS_ENABLED
+// Godot's Windows shim undefines DELETE; retain its exact standard access bit.
+constexpr DWORD FILE_DELETE_ACCESS = 0x00010000;
+
 class PrivateSecurity {
 	Vector<uint8_t> token_info;
 	PACL acl = nullptr;
@@ -233,7 +236,7 @@ Error MCPRecordIO::write_atomic(const String &p_path, const String &p_text, Stri
 	const Char16String target = p_path.replace("/", "\\").utf16();
 	// This handle survives publication until CloseHandle below. Its sharing must
 	// already permit readers and later replacements at the published filename.
-	HANDLE file = CreateFileW(reinterpret_cast<LPCWSTR>(temporary.get_data()), GENERIC_WRITE | DELETE,
+	HANDLE file = CreateFileW(reinterpret_cast<LPCWSTR>(temporary.get_data()), GENERIC_WRITE | FILE_DELETE_ACCESS,
 			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &security.attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
 	if (file == INVALID_HANDLE_VALUE) {
 		return fail("Cannot create a private MCP record.", r_error, ERR_CANT_CREATE);
