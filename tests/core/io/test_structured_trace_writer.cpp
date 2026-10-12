@@ -124,6 +124,29 @@ TEST_CASE("[StructuredTraceWriter] Session manifest, rolling JSONL, and payload 
 	CHECK(Dictionary(first_event.get("payloads", Dictionary())).size() == 2);
 }
 
+TEST_CASE("[StructuredTraceWriter] Live events remain visible with editor safe-save enabled") {
+	struct RestoreBackupSave {
+		bool enabled = FileAccess::is_backup_save_enabled();
+		~RestoreBackupSave() { FileAccess::set_backup_save(enabled); }
+	} restore_backup_save;
+	FileAccess::set_backup_save(true);
+	Error error = OK;
+	Ref<DirAccess> temporary_directory = DirAccess::create_temp("structured_trace_live", false, &error);
+	REQUIRE(error == OK);
+	StructuredTraceWriter::Options options;
+	options.root_directory_override = temporary_directory->get_current_dir();
+	StructuredTraceWriter writer;
+	REQUIRE(writer.open(Dictionary(), Dictionary(), options) == OK);
+	REQUIRE(writer.record("mcp", "started", "info", "1", Dictionary()) == OK);
+	const String path = writer.get_session_directory().path_join("events-0001.jsonl");
+	REQUIRE(FileAccess::exists(path));
+	const Dictionary event = JSON::parse_string(FileAccess::get_file_as_string(path).strip_edges());
+	CHECK(event.get("event", String()) == "started");
+	CHECK(writer.is_open());
+	CHECK(FileAccess::is_backup_save_enabled());
+	CHECK(writer.close() == OK);
+}
+
 TEST_CASE("[StructuredTraceWriter] Existing file payloads are referenced and never copied") {
 	Error error = OK;
 	Ref<DirAccess> temporary_directory = DirAccess::create_temp("structured_trace_ref", false, &error);

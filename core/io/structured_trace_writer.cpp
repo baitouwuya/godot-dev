@@ -292,7 +292,9 @@ Error StructuredTraceWriter::_open_next_event_file(String *r_error) {
 	current_event_file_index++;
 	const String name = vformat("events-%04d.jsonl", current_event_file_index);
 	Error error = OK;
-	current_event_file = FileAccess::open(session_directory.path_join(name), FileAccess::WRITE, &error);
+	// A trace is a live append stream. WRITE uses editor safe-save and hides the
+	// file behind a temporary name until close, losing crash-visible starts.
+	current_event_file = FileAccess::open(session_directory.path_join(name), FileAccess::WRITE_READ, &error);
 	if (current_event_file.is_null() || error != OK) {
 		_set_error(r_error, "Unable to open a structured trace event file.");
 		return error == OK ? ERR_CANT_OPEN : error;
