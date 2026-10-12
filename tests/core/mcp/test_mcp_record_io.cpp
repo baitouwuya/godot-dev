@@ -44,6 +44,17 @@ TEST_FORCE_LINK(test_mcp_record_io);
 
 namespace TestMCPRecordIO {
 
+TEST_CASE("[MCP][RecordIO] Absent directories and absent files both mean no record") {
+	Error error = OK;
+	Ref<DirAccess> temporary = DirAccess::create_temp("mcp_record_missing", false, &error);
+	REQUIRE(error == OK);
+	String text;
+	const String directory = temporary->get_current_dir().path_join("records");
+	CHECK(MCPRecordIO::read(directory.path_join("record.json"), 1024, text) == ERR_FILE_NOT_FOUND);
+	REQUIRE(MCPRecordIO::make_private_directory(directory) == OK);
+	CHECK(MCPRecordIO::read(directory.path_join("record.json"), 1024, text) == ERR_FILE_NOT_FOUND);
+}
+
 #ifdef WINDOWS_ENABLED
 class ScopedReadHandle {
 	HANDLE handle = INVALID_HANDLE_VALUE;

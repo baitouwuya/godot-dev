@@ -275,7 +275,8 @@ Error MCPRecordIO::read(const String &p_path, uint64_t p_max_bytes, String &r_te
 	HANDLE file = CreateFileW(reinterpret_cast<LPCWSTR>(path.get_data()), GENERIC_READ,
 			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 	if (file == INVALID_HANDLE_VALUE) {
-		return fail("Cannot open MCP record.", r_error, GetLastError() == ERROR_FILE_NOT_FOUND ? ERR_FILE_NOT_FOUND : ERR_CANT_OPEN);
+		const DWORD error = GetLastError();
+		return fail("Cannot open MCP record.", r_error, error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? ERR_FILE_NOT_FOUND : ERR_CANT_OPEN);
 	}
 	LARGE_INTEGER size;
 	if (!GetFileSizeEx(file, &size) || size.QuadPart < 0 || uint64_t(size.QuadPart) > p_max_bytes || uint64_t(size.QuadPart) > MAXDWORD) {
