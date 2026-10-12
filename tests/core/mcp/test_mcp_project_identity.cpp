@@ -94,4 +94,23 @@ TEST_CASE("[MCP][ProjectIdentity] Rejects missing project directories") {
 	CHECK_FALSE(identity.is_valid());
 }
 
+#ifdef UNIX_ENABLED
+TEST_CASE("[MCP][ProjectIdentity] Resolves symlink parent traversal before lexical normalization") {
+	Error error = OK;
+	Ref<DirAccess> root = DirAccess::create_temp("mcp_identity_link_parent", false, &error);
+	REQUIRE(error == OK);
+	REQUIRE(root->make_dir_recursive("actual/nested") == OK);
+	const String path = root->get_current_dir();
+	if (root->create_link(path.path_join("actual/nested"), path.path_join("alias")) != OK) {
+		return;
+	}
+	MCPProjectIdentity direct;
+	MCPProjectIdentity via_link_parent;
+	REQUIRE(MCPProjectIdentity::create(path.path_join("actual"), direct) == OK);
+	REQUIRE(MCPProjectIdentity::create(path.path_join("alias/.."), via_link_parent) == OK);
+	CHECK(via_link_parent.canonical_path == direct.canonical_path);
+	CHECK(via_link_parent.project_id == direct.project_id);
+}
+#endif
+
 } // namespace TestMCPProjectIdentity

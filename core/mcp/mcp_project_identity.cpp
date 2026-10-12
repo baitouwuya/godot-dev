@@ -35,6 +35,11 @@
 #include "core/templates/hash_set.h"
 #include "core/templates/vector.h"
 
+#ifdef UNIX_ENABLED
+#include <cerrno>
+#include <cstdlib>
+#endif
+
 namespace {
 
 constexpr int MAX_LINK_RESOLUTIONS = 64;
@@ -167,8 +172,21 @@ Error MCPProjectIdentity::canonicalize_project_path(const String &p_project_path
 		return ERR_INVALID_PARAMETER;
 	}
 
+	String filesystem_path = p_project_path;
+#ifdef UNIX_ENABLED
+	// Resolve filesystem semantics before any lexical simplify_path(). In
+	// particular, "symlink/.." names the target's parent, not the link's parent.
+	// DirAccessUnix otherwise retains the input spelling in get_current_dir().
+	char *resolved = realpath(p_project_path.utf8().get_data(), nullptr);
+	if (!resolved) {
+		set_error(r_error, vformat("Project directory '%s' does not exist or cannot be resolved.", p_project_path));
+		return errno == ENOENT ? ERR_DOES_NOT_EXIST : ERR_CANT_OPEN;
+	}
+	filesystem_path = String::utf8(resolved);
+	free(resolved);
+#endif
 	Error open_error = OK;
-	Ref<DirAccess> project_dir = DirAccess::open(p_project_path, &open_error);
+	Ref<DirAccess> project_dir = DirAccess::open(filesystem_path, &open_error);
 	if (project_dir.is_null()) {
 		set_error(r_error, vformat("Project directory '%s' does not exist or cannot be opened.", p_project_path));
 		return open_error == OK ? ERR_DOES_NOT_EXIST : open_error;

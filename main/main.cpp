@@ -1927,7 +1927,8 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 					if (!p.is_absolute_path()) {
 						p = OS::get_singleton()->get_cwd().path_join(p);
 					}
-					p = p.simplify_path();
+					// Preserve symlink/.. semantics until native project identity
+					// canonicalization; lexical simplification can select another project.
 					if (!DirAccess::dir_exists_absolute(p)) {
 						OS::get_singleton()->printerr("Invalid project path specified: \"%s\", aborting.\n", p.utf8().get_data());
 						goto error;
