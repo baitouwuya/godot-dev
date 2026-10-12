@@ -255,3 +255,29 @@ pwsh -File tests/editor/mcp/test_mcp_cli_smoke.ps1 `
 ```
 
 Optional parameters are `-TimeoutSeconds <5-300>` and `-KeepTemporaryProjects`. In addition to the baseline protocol checks, this test covers Windows-oriented editor extensions such as dirty ScriptEditor state, complex NodePath and structural rewrites, debug compression, persistent node groups/signals, and the broader runtime/editor workflow.
+
+
+## Recovery, Sessions, And Private Records
+
+The editor, stdio bridge, MCP session, and running game have separate lifetimes. Keep the stdio connection open across related calls, especially an asynchronous start followed by status/cancel, or a UI snapshot followed by an action. Clean stdin EOF deletes only that MCP session: it releases its input, waits, sampling, Harness, analysis snapshots, and build jobs, without closing the editor or stopping the game. A transport error is not proof that a mutation did not execute. The bridge does not replay failed requests or restart an editor to recover a connection. Cross-editor-crash session/job resumption is not provided.
+
+Discovery publishing failures are retried with bounded backoff. They do not close the editor. Confirmed lease replacement stops MCP while keeping the editor and its unsaved documents open. A graphical MCP service startup failure likewise leaves the editor open; an unsuccessful explicit headless Host startup still reports a nonzero exit code.
+
+Record directories and files are private to the current OS user (0700/0600 on Unix and a protected user-only ACL on Windows). Refresh replaces the record atomically rather than deleting it first. Readers cannot prevent ordinary Windows refreshes by keeping a share-delete handle open; a conflicting external reader leaves the old record intact and triggers a retry. Directories owned by another user, symbolic links/reparse points at the record directory, and unsupported secure-storage platforms fail closed. Do not copy bearer secrets into logs, command arguments, or bug reports.
+
+Editor-presence reuse applies to cooperating MCP-enabled godot-dev builds. It cannot discover an unrelated older/official editor that implements neither presence nor an MCP lease. Ordinary editors are never silently upgraded to a control server, and ordinary no-MCP multi-editor behavior is preserved.
+
+## Editor-Owned Files And Change Confirmations
+
+Use the dedicated script, scene, and project tools for documents managed by the editor. Generic file writes reject overwrites of open editor documents (including dirty/deleted-backed buffers), with an explicit managed-document error. Identical-byte writes are a no-op. Generic resource saves redirect Script and PackedScene resources to their native save paths instead of bypassing tab and scene bookkeeping.
+
+External-change confirmations are bound to a displayed path/time/content snapshot. A newer change requires a refreshed confirmation; filtered script checks retain conflicts from other tabs; resolved queued popups are cancelled. Scene reloads preflight every displayed scene before removing any edited tab, keeping dirty scenes when incoming content is invalid. These guards do not claim a cross-file atomic transaction against a writer changing files after validation.
+
+Additional real-process and native-dialog regressions:
+
+```bash
+python3 tests/editor/mcp/test_mcp_editor_lifecycle.py --binary <editor-binary>
+python3 tests/editor/mcp/test_mcp_external_changes_smoke.py --binary <editor-binary>
+```
+
+Run both with `--gui` on a display-backed desktop to cover actual windows; the lifecycle GUI run additionally covers concurrent detached startup and Host survival after the starting bridge exits. Headless runs explicitly do not establish display-server behavior. Run native Windows and macOS builds/tests separately; passing Linux smoke is not a substitute for those platforms.
