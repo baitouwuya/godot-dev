@@ -32,10 +32,25 @@
 #include "core/io/resource_loader.h"
 #include "editor/mcp/providers/mcp_variant_codec.h"
 #include "tests/test_macros.h"
+#include "tests/test_utils.h"
 
 TEST_FORCE_LINK(test_mcp_variant_codec);
 
 namespace TestMCPVariantCodec {
+
+class ScopedProjectResourcePath {
+	String previous_path;
+
+public:
+	explicit ScopedProjectResourcePath(const String &p_path) :
+			previous_path(TestProjectSettingsInternalsAccessor::resource_path()) {
+		TestProjectSettingsInternalsAccessor::resource_path() = p_path;
+	}
+
+	~ScopedProjectResourcePath() {
+		TestProjectSettingsInternalsAccessor::resource_path() = previous_path;
+	}
+};
 
 TEST_CASE("[MCP][Provider] Safe native Variants round-trip through JSON native encoding") {
 	Array values;
@@ -160,10 +175,13 @@ TEST_CASE("[MCP][Provider] Null object values use a safe JSON null representatio
 }
 
 TEST_CASE("[MCP][Provider] Resource references round-trip by safe res path") {
-	const String resource_path = "res://tests/editor/mcp/data/mcp_codec_resource.tres";
+	// Earlier tests can change the project root; resolve this fixture independently.
+	ScopedProjectResourcePath project_path(TestUtils::get_data_path("../editor/mcp/data").simplify_path());
+	const String resource_path = "res://mcp_codec_resource.tres";
 	REQUIRE(ResourceLoader::exists(resource_path));
 	const Ref<Resource> resource = ResourceLoader::load(resource_path);
 	REQUIRE(resource.is_valid());
+	CHECK(resource->get_path() == resource_path);
 
 	Variant encoded;
 	String error;
