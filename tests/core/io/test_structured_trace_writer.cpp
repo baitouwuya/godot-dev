@@ -142,6 +142,11 @@ TEST_CASE("[StructuredTraceWriter] Live events remain visible with editor safe-s
 	REQUIRE(FileAccess::exists(path));
 	const Dictionary event = JSON::parse_string(FileAccess::get_file_as_string(path).strip_edges());
 	CHECK(event.get("event", String()) == "started");
+	REQUIRE(writer.record("mcp", "finished", "info", "1", Dictionary()) == OK);
+	const PackedStringArray lines = FileAccess::get_file_as_string(path).split("\n", false);
+	REQUIRE(lines.size() == 2);
+	CHECK(Dictionary(JSON::parse_string(lines[0])).get("event", String()) == "started");
+	CHECK(Dictionary(JSON::parse_string(lines[1])).get("event", String()) == "finished");
 	CHECK(writer.is_open());
 	CHECK(FileAccess::is_backup_save_enabled());
 	CHECK(writer.close() == OK);

@@ -299,6 +299,10 @@ Error StructuredTraceWriter::_open_next_event_file(String *r_error) {
 		_set_error(r_error, "Unable to open a structured trace event file.");
 		return error == OK ? ERR_CANT_OPEN : error;
 	}
+	// Editor safe-save also denies concurrent Windows readers while a writable
+	// handle is open. Keep streams closed between records on every platform.
+	current_event_file->close();
+	current_event_file.unref();
 	current_event_file_bytes = 0;
 	event_files.push_back(name);
 	return _write_manifest(r_error);
@@ -399,9 +403,19 @@ Error StructuredTraceWriter::record(const String &p_category, const String &p_ev
 			return error;
 		}
 	}
+	Error open_error = OK;
+	current_event_file = FileAccess::open(session_directory.path_join(event_files[event_files.size() - 1]), FileAccess::READ_WRITE, &open_error);
+	if (current_event_file.is_null() || open_error != OK) {
+		_set_error(r_error, "Unable to reopen a structured trace event file.");
+		_close_no_lock();
+		return open_error == OK ? ERR_CANT_OPEN : open_error;
+	}
+	current_event_file->seek_end();
 	current_event_file->store_line(line);
 	current_event_file->flush();
 	const Error write_error = current_event_file->get_error();
+	current_event_file->close();
+	current_event_file.unref();
 	if (write_error != OK) {
 		_set_error(r_error, "Unable to write a structured trace event.");
 		_close_no_lock();
