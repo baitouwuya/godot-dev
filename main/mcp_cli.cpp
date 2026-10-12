@@ -30,11 +30,11 @@
 
 #include "mcp_cli.h"
 
-#include "core/io/json.h"
 #include "core/io/file_access.h"
+#include "core/io/json.h"
 #include "core/mcp/mcp_project_instance.h"
-#include "core/os/os.h"
 #include "core/mcp/mcp_protocol.h"
+#include "core/os/os.h"
 #include "main/mcp_cli_stdio_bridge.h"
 
 #ifdef TOOLS_ENABLED
@@ -233,8 +233,7 @@ Error MCPCLI::_resolve_ready_host(const String &p_project_path, MCPProjectIdenti
 		}
 		if (error == OK) {
 			const uint64_t now = OS::get_singleton()->get_ticks_usec();
-			const uint64_t remaining_ms = options.startup_wait_ms == 0 ? options.request_timeout_ms :
-					(now < deadline ? MAX((deadline - now) / 1000, (uint64_t)1) : 1);
+			const uint64_t remaining_ms = options.startup_wait_ms == 0 ? options.request_timeout_ms : (now < deadline ? MAX((deadline - now) / 1000, (uint64_t)1) : 1);
 			const Error health_error = transport->check_host(r_record, MIN(options.request_timeout_ms, remaining_ms), r_error);
 			if (health_error == OK) {
 				return OK;

@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  mcp_cli_editor_launcher.cpp                                                  */
+/*  mcp_cli_editor_launcher.cpp                                           */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -33,10 +33,11 @@
 #ifdef WINDOWS_ENABLED
 #include <windows.h>
 #elif defined(UNIX_ENABLED) && !defined(WEB_ENABLED)
-#include <cerrno>
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include <cerrno>
 #endif
 
 Error MCPOSCLIEditorLauncher::launch(const String &p_project_path, ProcessID &r_pid, String &r_error) {
@@ -61,7 +62,7 @@ Error MCPOSCLIEditorLauncher::launch(const String &p_project_path, ProcessID &r_
 	startup.cb = sizeof(startup);
 	PROCESS_INFORMATION process = {};
 	if (!CreateProcessW(nullptr, reinterpret_cast<LPWSTR>(command.ptrw()), nullptr, nullptr, FALSE, flags,
-			nullptr, nullptr, &startup, &process)) {
+				nullptr, nullptr, &startup, &process)) {
 		r_error = vformat("LAUNCH_UNAVAILABLE: Cannot start an independent editor (Windows error %d). Start the MCP editor explicitly and reconnect.", GetLastError());
 		return ERR_CANT_FORK;
 	}

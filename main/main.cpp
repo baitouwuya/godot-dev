@@ -5577,7 +5577,6 @@ void Main::cleanup(bool p_force) {
 	MCPEditorPlugin::configure(false);
 #endif
 
-
 	OS::get_singleton()->_cmdline.clear();
 	OS::get_singleton()->_user_args.clear();
 	OS::get_singleton()->_execpath = "";

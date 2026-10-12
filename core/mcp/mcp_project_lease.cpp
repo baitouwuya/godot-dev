@@ -38,9 +38,10 @@
 #ifdef WINDOWS_ENABLED
 #include <windows.h>
 #elif defined(UNIX_ENABLED)
+#include <signal.h>
+
 #include <cerrno>
 #include <climits>
-#include <signal.h>
 #endif
 
 namespace {

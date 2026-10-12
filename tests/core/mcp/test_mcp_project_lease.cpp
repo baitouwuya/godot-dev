@@ -47,7 +47,6 @@ TEST_CASE("[MCP][ProjectLease] OS probe recognizes a live non-child owner") {
 	CHECK_FALSE(probe.is_process_running(-1));
 }
 
-
 class FixedHealthProbe final : public MCPProjectLeaseHealthProbe {
 	bool healthy = false;
 

@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  mcp_project_instance.cpp                                                 */
+/*  mcp_project_instance.cpp                                              */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -127,9 +127,7 @@ Error MCPProjectInstance::register_editor(const String &p_project_path, bool p_r
 			if (r_conflicting_owner) {
 				*r_conflicting_owner = running[0];
 			}
-			set_error(r_error, running[0].transport == "editor" ?
-					"MCP_DISABLED: An existing editor has not enabled MCP. Keep it open; enable MCP through an explicit user-approved restart." :
-					"ALREADY_RUNNING: An existing editor owns or is starting this project. Connect to it instead of launching another editor.");
+			set_error(r_error, running[0].transport == "editor" ? "MCP_DISABLED: An existing editor has not enabled MCP. Keep it open; enable MCP through an explicit user-approved restart." : "ALREADY_RUNNING: An existing editor owns or is starting this project. Connect to it instead of launching another editor.");
 			return ERR_ALREADY_IN_USE;
 		}
 		// Retain the original Host lease as well, including compatibility with a

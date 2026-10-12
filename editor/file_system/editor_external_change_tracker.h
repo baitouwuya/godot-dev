@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  editor_external_change_tracker.h                                    */
+/*  editor_external_change_tracker.h                                      */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
