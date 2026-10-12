@@ -96,6 +96,7 @@ public:
 		access.Trustee.ptstrName = reinterpret_cast<LPWSTR>(reinterpret_cast<TOKEN_USER *>(token_info.ptrw())->User.Sid);
 		if (SetEntriesInAclW(1, &access, nullptr, &acl) != ERROR_SUCCESS ||
 				!InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) ||
+				!SetSecurityDescriptorOwner(&descriptor, reinterpret_cast<TOKEN_USER *>(token_info.ptrw())->User.Sid, FALSE) ||
 				!SetSecurityDescriptorDacl(&descriptor, TRUE, acl, FALSE) ||
 				!SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED)) {
 			return false;
@@ -133,10 +134,28 @@ Error MCPRecordIO::write_atomic(const String &p_path, const String &p_text, Stri
 		return fail("MCP records require an absolute filesystem path.", r_error, ERR_INVALID_PARAMETER);
 	}
 	const String directory = p_path.get_base_dir();
+#ifdef WINDOWS_ENABLED
+	PrivateSecurity security;
+	if (!security.initialize()) {
+		return fail("Cannot initialize private MCP record permissions.", r_error, ERR_UNAUTHORIZED);
+	}
+	const Error directory_error = DirAccess::make_dir_recursive_absolute(directory.get_base_dir());
+	if (directory_error != OK && directory_error != ERR_ALREADY_EXISTS) {
+		return fail("Cannot create MCP record parent directory.", r_error, directory_error);
+	}
+	const Char16String directory_path = directory.utf16();
+	if (!CreateDirectoryW(reinterpret_cast<LPCWSTR>(directory_path.get_data()), &security.attributes) && GetLastError() != ERROR_ALREADY_EXISTS) {
+		return fail("Cannot create a private MCP record directory.", r_error, ERR_CANT_CREATE);
+	}
+	if (!security.protect_directory(directory)) {
+		return fail("Cannot establish owner-only MCP record permissions.", r_error, ERR_UNAUTHORIZED);
+	}
+#else
 	const Error directory_error = DirAccess::make_dir_recursive_absolute(directory);
 	if (directory_error != OK && directory_error != ERR_ALREADY_EXISTS) {
 		return fail("Cannot create MCP record directory.", r_error, directory_error);
 	}
+#endif
 	String nonce;
 	if (MCPProjectIdentity::generate_instance_id(nonce) != OK) {
 		return fail("Cannot generate an MCP record temporary name.", r_error, ERR_CANT_CREATE);
@@ -144,10 +163,6 @@ Error MCPRecordIO::write_atomic(const String &p_path, const String &p_text, Stri
 	const String temporary_path = p_path + "." + nonce + ".tmp";
 	const CharString bytes = p_text.utf8();
 #ifdef WINDOWS_ENABLED
-	PrivateSecurity security;
-	if (!security.initialize() || !security.protect_directory(directory)) {
-		return fail("Cannot establish owner-only MCP record permissions.", r_error, ERR_UNAUTHORIZED);
-	}
 	const Char16String temporary = temporary_path.utf16();
 	const Char16String target = p_path.utf16();
 	HANDLE file = CreateFileW(reinterpret_cast<LPCWSTR>(temporary.get_data()), GENERIC_WRITE, 0,
