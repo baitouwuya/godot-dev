@@ -66,6 +66,14 @@ func _process(_delta: float) -> void:
 func _execute(command: Dictionary) -> void:
 	var error := ""
 	match command.action:
+		"assert_locale":
+			var settings = EditorInterface.get_editor_settings()
+			var language = settings.get_setting("interface/editor/localization/editor_language")
+			var locale = TranslationServer.get_tool_locale()
+			if language != "en" or locale != "en":
+				error = "Expected English editor override and tool locale, got %s and %s (system %s)" % [language, locale, OS.get_locale()]
+			elif settings.get("interface/editor/localization/editor_language") != "auto":
+				error = "The project language override changed the isolated editor profile"
 		"scan":
 			EditorInterface.get_script_editor().reload_open_files()
 		"focus":
@@ -125,7 +133,9 @@ def run(binary: str, timeout: int, gui: bool) -> None:
         ):
             (root / directory).mkdir(exist_ok=True)
             os.environ[key] = str(root / directory)
-        os.environ["LANG"] = "en_US.UTF-8"
+        # Deliberately conflict with the project language to exercise its override.
+        # macOS ignores LANG and uses its native preferred language instead.
+        os.environ["LANG"] = "zh_CN.UTF-8"
         write_text(
             project / "project.godot",
             """config_version=5
@@ -134,6 +144,7 @@ config/name="External Change Regression"
 [rendering]
 renderer/rendering_method="gl_compatibility"
 [editor_overrides]
+interface/editor/localization/editor_language="en"
 text_editor/behavior/files/auto_reload_scripts_on_external_change=false
 interface/editor/behavior/save_on_focus_loss=false
 interface/editor/behavior/import_resources_when_unfocused=false
@@ -239,6 +250,8 @@ script="plugin.gd"
                 )
                 require(snapshot["unsaved"] == dirty, f"{name} dirty state was changed unexpectedly")
 
+            print("Checking project-local English dialog titles", flush=True)
+            command("assert_locale")
             print("Checking native saves and managed-write guards", flush=True)
             command("open_scene", path="res://first.tscn")
             state("a.gd")

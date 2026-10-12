@@ -281,3 +281,5 @@ python3 tests/editor/mcp/test_mcp_external_changes_smoke.py --binary <editor-bin
 ```
 
 Run both with `--gui` on a display-backed desktop to cover actual windows; the lifecycle GUI run additionally covers concurrent detached startup and Host survival after the starting bridge exits. Headless runs explicitly do not establish display-server behavior. Run native Windows and macOS builds/tests separately; passing Linux smoke is not a substitute for those platforms.
+
+The external-change fixture pins the editor language to English through a project override and verifies the effective locale without changing the isolated profile's `auto` preference. It deliberately sets `LANG=zh_CN.UTF-8` so Linux runs exercise exact scene/script dialog matching against a non-English system locale. For the equivalent macOS regression, run it with a non-English preferred system language, since macOS does not use `LANG` for this setting.
