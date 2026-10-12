@@ -51,7 +51,7 @@ public:
 		String alias_argument;
 		String alias_in_use_code;
 		String alias_in_use_message;
-		int max_records = 0;
+		uint32_t max_records = 0;
 	};
 
 private:
