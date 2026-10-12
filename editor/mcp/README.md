@@ -61,7 +61,7 @@ For example, when starting an editor is specifically intended:
 godot --mcp-stdio --path C:\projects\my-game --allow-start --wait-ms 30000
 ```
 
-The explicitly started Host has its own lifetime. Ending the bridge does not stop it. The launcher does not inherit the bridge's standard streams; on Windows it must also escape a parent process Job. If that Job forbids independent startup, `LAUNCH_UNAVAILABLE` asks for an explicit editor launch instead of using a termination-bound fallback.
+The explicitly started Host has its own lifetime. Ending the bridge does not stop it. A credential-free launch candidate retains the child PID after a startup timeout, so later callers wait for that same process rather than launching another. Corrupt or indeterminate launch metadata fails closed. Process creation and candidate publication are not one crash-atomic operation; the early editor ownership check remains the final protection against a second GUI and project-file writes. The launcher does not inherit the bridge's standard streams; on Windows it must also escape a parent process Job. If that Job forbids independent startup, `LAUNCH_UNAVAILABLE` asks for an explicit editor launch instead of using a termination-bound fallback.
 
 `--restart` is deliberately rejected: the bridge cannot approve discarding unsaved work or closing an existing editor. Use the editor's explicit restart workflow. After a restart, create a new bridge so discovery obtains the new instance ID, endpoint and credential. Failed requests are never automatically replayed; a timed-out mutation may already have taken effect.
 

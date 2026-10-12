@@ -30,6 +30,7 @@
 
 #include "mcp_cli.h"
 
+#include "core/io/dir_access.h"
 #include "core/io/file_access.h"
 #include "core/io/json.h"
 #include "core/mcp/mcp_project_instance.h"
@@ -223,6 +224,19 @@ Error MCPCLI::_resolve_ready_host(const String &p_project_path, MCPProjectIdenti
 	bool launched = false;
 	bool observed_starting = false;
 	ProcessID launched_pid = 0;
+	const String candidate_path = MCPProjectInstance::get_launch_directory(r_identity).path_join("candidate.json");
+	auto clear_own_candidate = [&]() {
+		if (!launched || !launch_guard.is_acquired()) {
+			return;
+		}
+		MCPDiscoveryRecord candidate;
+		if (MCPDiscovery::read_record_file(candidate_path, candidate) == OK && candidate.project_id == r_identity.project_id &&
+				candidate.instance_id == r_identity.instance_id && candidate.pid == launched_pid && candidate.transport == "editor-launch") {
+			// The launch guard still excludes other writers. Match both nonce
+			// and PID so teardown cannot remove a newer caller's candidate.
+			DirAccess::remove_absolute(candidate_path);
+		}
+	};
 	const uint64_t deadline = OS::get_singleton()->get_ticks_usec() + options.startup_wait_ms * 1000;
 	while (true) {
 		MCPProjectIdentity lookup_identity;
@@ -236,6 +250,9 @@ Error MCPCLI::_resolve_ready_host(const String &p_project_path, MCPProjectIdenti
 			const uint64_t remaining_ms = options.startup_wait_ms == 0 ? options.request_timeout_ms : (now < deadline ? MAX((deadline - now) / 1000, (uint64_t)1) : 1);
 			const Error health_error = transport->check_host(r_record, MIN(options.request_timeout_ms, remaining_ms), r_error);
 			if (health_error == OK) {
+				if (r_record.pid == launched_pid) {
+					clear_own_candidate();
+				}
 				return OK;
 			}
 			if (health_error == ERR_INVALID_DATA) {
@@ -263,7 +280,18 @@ Error MCPCLI::_resolve_ready_host(const String &p_project_path, MCPProjectIdenti
 		const Error owner_result = owner_lookup.read_owner(owner);
 		const bool live_owner = owner_result == OK && process_probe->is_process_running(owner.pid);
 		const bool live_record = r_record.is_valid(false) && process_probe->is_process_running(r_record.pid);
-		if (!running.is_empty() || live_owner || live_record) {
+		MCPDiscoveryRecord candidate;
+		const Error candidate_result = MCPDiscovery::read_record_file(candidate_path, candidate, &presence_error);
+		if (candidate_result != OK && candidate_result != ERR_FILE_NOT_FOUND && candidate_result != ERR_DOES_NOT_EXIST) {
+			r_error = "OWNERSHIP_UNCERTAIN: Cannot read the previous launch candidate. " + presence_error;
+			return candidate_result;
+		}
+		if (candidate_result == OK && (!candidate.is_valid(false) || candidate.project_id != r_identity.project_id || candidate.project_path != r_identity.canonical_path || candidate.transport != "editor-launch")) {
+			r_error = "OWNERSHIP_UNCERTAIN: The previous launch candidate has an invalid project identity.";
+			return ERR_INVALID_DATA;
+		}
+		const bool live_candidate = candidate_result == OK && process_probe->is_process_running(candidate.pid);
+		if (!running.is_empty() || live_owner || live_record || live_candidate) {
 			observed_starting = true;
 			r_error = "HOST_NOT_READY: The existing project editor is starting, busy, or published in another discovery directory. No editor was relaunched.";
 		} else if (!launched && options.allow_start && !observed_starting) {
@@ -278,6 +306,14 @@ Error MCPCLI::_resolve_ready_host(const String &p_project_path, MCPProjectIdenti
 				return ERR_DOES_NOT_EXIST;
 			}
 			if (!launch_guard.is_acquired()) {
+				MCPDiscoveryRecord previous_launch;
+				if (launch_guard.read_owner(previous_launch) == OK && !process_probe->is_process_running(previous_launch.pid) && candidate_result != OK) {
+					// A caller can die after spawn but before recording the child.
+					// An abandoned guard with no candidate is therefore ambiguous,
+					// not permission to spawn another editor after a grace period.
+					r_error = "OWNERSHIP_UNCERTAIN: A previous launcher exited before its editor PID was recorded. Inspect that startup before allowing another launch.";
+					return ERR_BUSY;
+				}
 				MCPDiscoveryRecord guard_owner = MCPDiscoveryRecord::create(r_identity, "editor-launch", String(), MCPProtocol::PROTOCOL_VERSION_LATEST);
 				MCPDiscoveryRecord contender;
 				const Error guard_result = launch_guard.acquire(guard_owner, no_health, &contender, &r_error, 0, process_probe);
@@ -297,6 +333,16 @@ Error MCPCLI::_resolve_ready_host(const String &p_project_path, MCPProjectIdenti
 					return launch_error;
 				}
 				launched = true;
+				MCPDiscoveryRecord launched_candidate = MCPDiscoveryRecord::create(r_identity, "editor-launch", String(), MCPProtocol::PROTOCOL_VERSION_LATEST);
+				launched_candidate.pid = launched_pid;
+				const Error candidate_write = MCPDiscovery::write_record_file(candidate_path, launched_candidate, false, &r_error);
+				if (candidate_write != OK) {
+					// Keep durable evidence that startup may already have happened.
+					// Do not kill the child, erase the guard or retry the spawn.
+					launch_guard.abandon();
+					r_error = "OWNERSHIP_UNCERTAIN: An editor was started but its candidate could not be recorded. " + r_error;
+					return candidate_write;
+				}
 				_diagnose(vformat("ROLE=bridge STARTED_EDITOR pid=%d; editor lifetime is independent of this connection.", launched_pid));
 				r_error = "HOST_STARTING: Waiting for the explicitly started editor. It will not be closed or relaunched on timeout.";
 			}
@@ -311,6 +357,7 @@ Error MCPCLI::_resolve_ready_host(const String &p_project_path, MCPProjectIdenti
 			r_error = "HOST_STARTING: The selected startup has not published a reachable Host. No additional editor will be launched.";
 		}
 		if (launched && !launcher->is_running(launched_pid)) {
+			clear_own_candidate();
 			r_error = vformat("LAUNCH_EXITED: Editor PID %d exited before becoming ready. Start it explicitly to inspect startup errors; no automatic relaunch was attempted.", launched_pid);
 			return ERR_CANT_CREATE;
 		}

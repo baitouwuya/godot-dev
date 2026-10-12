@@ -545,11 +545,17 @@ public:
 	bool is_process_running(ProcessID) const override { return true; }
 };
 
+class DeadProcessProbe final : public MCPProjectLeaseProcessProbe {
+public:
+	bool is_process_running(ProcessID) const override { return false; }
+};
+
 class RecordingLauncher final : public MCPCLIEditorLauncher {
 public:
 	int calls = 0;
 	Error result = ERR_UNAVAILABLE;
 	String discovery_directory;
+	String block_candidate_path;
 	MCPDiscoveryRecord record;
 
 	bool is_running(ProcessID) const override { return true; }
@@ -561,7 +567,11 @@ public:
 			return result;
 		}
 		r_pid = record.pid;
-		return MCPDiscovery::write_record(discovery_directory, record, true, &r_error);
+		const Error publish_error = MCPDiscovery::write_record(discovery_directory, record, true, &r_error);
+		if (publish_error == OK && !block_candidate_path.is_empty()) {
+			return DirAccess::make_dir_absolute(block_candidate_path);
+		}
+		return publish_error;
 	}
 };
 
@@ -647,6 +657,7 @@ TEST_CASE("[MCP][CLI] Explicit start launches once and concurrent callers do not
 		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_OK);
 		CHECK(launcher.calls == 1);
 		CHECK(transport.host_check_count == 1);
+		CHECK_FALSE(FileAccess::exists(MCPProjectInstance::get_launch_directory(identity).path_join("candidate.json")));
 	}
 	SUBCASE("Connect-only never launches") {
 		options.allow_start = false;
@@ -663,6 +674,53 @@ TEST_CASE("[MCP][CLI] Explicit start launches once and concurrent callers do not
 		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
 		CHECK(launcher.calls == 0);
 		CHECK(guard.is_acquired());
+	}
+	SUBCASE("A live candidate survives its launcher exiting and prevents another spawn") {
+		MCPDiscoveryRecord candidate = record;
+		candidate.transport = "editor-launch";
+		candidate.endpoint = String();
+		const String candidate_path = MCPProjectInstance::get_launch_directory(identity).path_join("candidate.json");
+		REQUIRE(MCPDiscovery::write_record_file(candidate_path, candidate, false) == OK);
+		options.startup_wait_ms = 1;
+		MCPCLI cli(options, &transport, &io, &launcher, &process_probe);
+		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
+		CHECK(launcher.calls == 0);
+		MCPDiscoveryRecord retained;
+		REQUIRE(MCPDiscovery::read_record_file(candidate_path, retained) == OK);
+		CHECK(retained.instance_id == candidate.instance_id);
+		CHECK(retained.pid == candidate.pid);
+	}
+	SUBCASE("Corrupt candidate metadata never authorizes a launch") {
+		const String candidate_path = MCPProjectInstance::get_launch_directory(identity).path_join("candidate.json");
+		REQUIRE(MCPDiscovery::write_record_file(candidate_path, record, false) == OK);
+		MCPCLI cli(options, &transport, &io, &launcher, &process_probe);
+		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
+		CHECK(launcher.calls == 0);
+		REQUIRE(io.stderr_lines.size() == 1);
+		CHECK(io.stderr_lines[0].contains("OWNERSHIP_UNCERTAIN"));
+	}
+	SUBCASE("A dead launcher with no recorded candidate is ambiguous and fails closed") {
+		NoEditorHealth health;
+		MCPProjectLease abandoned(identity, MCPProjectInstance::get_launch_directory(identity));
+		REQUIRE(abandoned.acquire(record, health) == OK);
+		abandoned.abandon();
+		DeadProcessProbe dead_process;
+		MCPCLI cli(options, &transport, &io, &launcher, &dead_process);
+		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
+		CHECK(launcher.calls == 0);
+		CHECK(FileAccess::exists(abandoned.get_owner_file()));
+		REQUIRE(io.stderr_lines.size() == 1);
+		CHECK(io.stderr_lines[0].contains("OWNERSHIP_UNCERTAIN"));
+	}
+	SUBCASE("Candidate publication failure preserves evidence and never retries or kills") {
+		launcher.block_candidate_path = MCPProjectInstance::get_launch_directory(identity).path_join("candidate.json");
+		MCPCLI cli(options, &transport, &io, &launcher, &process_probe);
+		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
+		CHECK(launcher.calls == 1);
+		MCPProjectLease retained_guard(identity, MCPProjectInstance::get_launch_directory(identity));
+		CHECK(FileAccess::exists(retained_guard.get_owner_file()));
+		REQUIRE(io.stderr_lines.size() == 1);
+		CHECK(io.stderr_lines[0].contains("OWNERSHIP_UNCERTAIN"));
 	}
 	SUBCASE("Failed launch is not retried") {
 		launcher.result = ERR_CANT_FORK;

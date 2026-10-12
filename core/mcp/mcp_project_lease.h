@@ -85,6 +85,12 @@ public:
 	Error refresh(const MCPDiscoveryRecord &p_owner, String *r_error = nullptr, uint64_t p_now_unix_ms = 0);
 	Error read_owner(MCPDiscoveryRecord &r_owner, String *r_error = nullptr) const;
 	Error release(String *r_error = nullptr);
+	// Retain evidence of an indeterminate launch. Its coordinator must refuse
+	// stale reclamation until the candidate process can be identified safely.
+	void abandon() {
+		acquired = false;
+		owned_instance_id = String();
+	}
 
 	bool is_acquired() const { return acquired; }
 	const String &get_lock_directory() const { return lock_directory; }
