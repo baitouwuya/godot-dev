@@ -35,6 +35,12 @@
 #include "core/mcp/mcp_record_io.h"
 #include "core/os/os.h"
 
+#ifdef UNIX_ENABLED
+#include <cerrno>
+#include <climits>
+#include <signal.h>
+#endif
+
 namespace {
 
 void set_error(String *r_error, const String &p_error) {
@@ -50,7 +56,20 @@ uint64_t resolve_now(uint64_t p_now_unix_ms) {
 } // namespace
 
 bool MCPOSProjectLeaseProcessProbe::is_process_running(ProcessID p_pid) const {
-	return p_pid > 0 && OS::get_singleton()->is_process_running(p_pid);
+	if (p_pid <= 0) {
+		return false;
+	}
+#ifdef UNIX_ENABLED
+	// OS_Unix::is_process_running uses waitpid and only knows child processes.
+	// An editor discovered by another independently started client is not its
+	// child. Signal 0 checks existence without sending a signal or reaping it.
+	if (p_pid > INT_MAX) {
+		return false;
+	}
+	return ::kill((pid_t)p_pid, 0) == 0 || errno != ESRCH;
+#else
+	return OS::get_singleton()->is_process_running(p_pid);
+#endif
 }
 
 bool MCPProjectLease::_record_belongs_to_identity(const MCPDiscoveryRecord &p_record) const {

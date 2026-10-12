@@ -34,8 +34,19 @@ TEST_FORCE_LINK(test_mcp_project_lease);
 
 #include "core/io/dir_access.h"
 #include "core/mcp/mcp_project_lease.h"
+#include "core/os/os.h"
 
 namespace TestMCPProjectLease {
+
+TEST_CASE("[MCP][ProjectLease] OS probe recognizes a live non-child owner") {
+	MCPOSProjectLeaseProcessProbe probe;
+	// Our own process is alive, but is not our own child. A waitpid-based
+	// implementation incorrectly rejects it with ECHILD on Unix.
+	CHECK(probe.is_process_running(OS::get_singleton()->get_process_id()));
+	CHECK_FALSE(probe.is_process_running(0));
+	CHECK_FALSE(probe.is_process_running(-1));
+}
+
 
 class FixedHealthProbe final : public MCPProjectLeaseHealthProbe {
 	bool healthy = false;
