@@ -712,6 +712,30 @@ TEST_CASE("[MCP][CLI] Explicit start launches once and concurrent callers do not
 		REQUIRE(io.stderr_lines.size() == 1);
 		CHECK(io.stderr_lines[0].contains("OWNERSHIP_UNCERTAIN"));
 	}
+	SUBCASE("A stale dead candidate cannot justify reclaiming a newer abandoned launch") {
+		NoEditorHealth health;
+		MCPDiscoveryRecord newer_launch = record;
+		newer_launch.transport = "editor-launch";
+		newer_launch.endpoint = String();
+		MCPProjectLease abandoned(identity, MCPProjectInstance::get_launch_directory(identity));
+		REQUIRE(abandoned.acquire(newer_launch, health) == OK);
+		abandoned.abandon();
+		MCPProjectIdentity older_identity;
+		REQUIRE(MCPProjectIdentity::create(project_path, older_identity) == OK);
+		MCPDiscoveryRecord older_candidate = MCPDiscoveryRecord::create(older_identity, "editor-launch", String(), MCPProtocol::PROTOCOL_VERSION_LATEST);
+		REQUIRE(older_candidate.instance_id != newer_launch.instance_id);
+		const String candidate_path = MCPProjectInstance::get_launch_directory(identity).path_join("candidate.json");
+		REQUIRE(MCPDiscovery::write_record_file(candidate_path, older_candidate, false) == OK);
+		DeadProcessProbe dead_process;
+		MCPCLI cli(options, &transport, &io, &launcher, &dead_process);
+		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
+		CHECK(launcher.calls == 0);
+		MCPDiscoveryRecord retained;
+		REQUIRE(abandoned.read_owner(retained) == OK);
+		CHECK(retained.instance_id == newer_launch.instance_id);
+		REQUIRE(io.stderr_lines.size() == 1);
+		CHECK(io.stderr_lines[0].contains("OWNERSHIP_UNCERTAIN"));
+	}
 	SUBCASE("Candidate publication failure preserves evidence and never retries or kills") {
 		launcher.block_candidate_path = MCPProjectInstance::get_launch_directory(identity).path_join("candidate.json");
 		MCPCLI cli(options, &transport, &io, &launcher, &process_probe);

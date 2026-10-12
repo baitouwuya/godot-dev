@@ -307,11 +307,15 @@ Error MCPCLI::_resolve_ready_host(const String &p_project_path, MCPProjectIdenti
 			}
 			if (!launch_guard.is_acquired()) {
 				MCPDiscoveryRecord previous_launch;
-				if (launch_guard.read_owner(previous_launch) == OK && !process_probe->is_process_running(previous_launch.pid) && candidate_result != OK) {
+				if (launch_guard.read_owner(previous_launch) == OK && !process_probe->is_process_running(previous_launch.pid) &&
+						(candidate_result != OK || candidate.instance_id != previous_launch.instance_id ||
+								candidate.project_id != previous_launch.project_id || candidate.project_path != previous_launch.project_path ||
+								previous_launch.transport != "editor-launch")) {
 					// A caller can die after spawn but before recording the child.
-					// An abandoned guard with no candidate is therefore ambiguous,
-					// not permission to spawn another editor after a grace period.
-					r_error = "OWNERSHIP_UNCERTAIN: A previous launcher exited before its editor PID was recorded. Inspect that startup before allowing another launch.";
+					// Only the candidate bearing this exact launch nonce can prove
+					// what was started. A dead candidate left by an older launch is
+					// not evidence that the newer launch's child also exited.
+					r_error = "OWNERSHIP_UNCERTAIN: A previous launcher exited without a matching candidate record. Inspect that startup before allowing another launch.";
 					return ERR_BUSY;
 				}
 				MCPDiscoveryRecord guard_owner = MCPDiscoveryRecord::create(r_identity, "editor-launch", String(), MCPProtocol::PROTOCOL_VERSION_LATEST);
