@@ -34,10 +34,6 @@ var last_id := 0
 var busy := false
 
 func _enter_tree() -> void:
-	var settings = EditorInterface.get_editor_settings()
-	settings.set_setting("text_editor/behavior/files/auto_reload_scripts_on_external_change", false)
-	settings.set_setting("interface/editor/behavior/save_on_focus_loss", false)
-	settings.set_setting("interface/editor/behavior/import_resources_when_unfocused", false)
 	set_process(true)
 
 func _dialogs(node: Node, result: Array) -> void:
@@ -111,7 +107,7 @@ def run(binary: str, timeout: int, gui: bool) -> None:
     with tempfile.TemporaryDirectory(prefix="godot-external-changes-") as temp:
         root = Path(temp)
         project = root / "project"
-        # Keep the test plugin's editor settings and cache outside the user's profile.
+        # Keep editor caches outside the user's profile; behavior overrides live in the project.
         for key, directory in (
             ("HOME", "home"),
             ("XDG_CONFIG_HOME", "config"),
@@ -130,6 +126,10 @@ def run(binary: str, timeout: int, gui: bool) -> None:
 config/name="External Change Regression"
 [rendering]
 renderer/rendering_method="gl_compatibility"
+[editor_overrides]
+text_editor/behavior/files/auto_reload_scripts_on_external_change=false
+interface/editor/behavior/save_on_focus_loss=false
+interface/editor/behavior/import_resources_when_unfocused=false
 [editor_plugins]
 enabled=PackedStringArray("res://addons/probe/plugin.cfg")
 """,
