@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -30,7 +30,7 @@
 
 #include "mcp_harness_tool_utils.h"
 
-#include "mcp_tool_utils.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
 
 namespace {
 
@@ -48,7 +48,7 @@ static Dictionary _non_negative_integer_schema(const String &p_description) {
 
 static Dictionary _summary_output_properties() {
 	Dictionary state = MCPToolUtils::make_property_schema("string", "Harness job lifecycle state.");
-	state["enum"] = PackedStringArray{ "running", "cancelling", "collecting_evidence", "completed", "failed", "cancelled" };
+	state["enum"] = PackedStringArray{ "running", "cancelling", "collecting_evidence", "completed", "failed", "cancelled" }; // codespell:ignore cancelling
 	Dictionary debugger_session = MCPToolUtils::make_property_schema("integer", "Debugger session index, or -1 when auto-selected.");
 	debugger_session["minimum"] = -1;
 	Dictionary runtime_generation = MCPToolUtils::make_property_schema("integer", "Runtime generation that owns the job.");

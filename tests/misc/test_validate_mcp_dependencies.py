@@ -9,7 +9,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR_PATH = REPOSITORY_ROOT / "misc/scripts/validate_mcp_dependencies.py"
 SPEC = importlib.util.spec_from_file_location("validate_mcp_dependencies", VALIDATOR_PATH)

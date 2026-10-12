@@ -31,11 +31,11 @@
 #include "scene_debugger.h"
 
 #ifdef MCP_ENABLED
-#include "mcp_runtime_condition_scheduler.h"
-#include "mcp_runtime_input_controller.h"
-#include "mcp_runtime_observation_controller.h"
-#include "mcp_runtime_performance_sampler.h"
-#include "mcp_runtime_property_controller.h"
+#include "scene/debugger/mcp_runtime_condition_scheduler.h"
+#include "scene/debugger/mcp_runtime_input_controller.h"
+#include "scene/debugger/mcp_runtime_observation_controller.h"
+#include "scene/debugger/mcp_runtime_performance_sampler.h"
+#include "scene/debugger/mcp_runtime_property_controller.h"
 #endif
 
 #include "core/config/engine.h"
@@ -265,7 +265,8 @@ Error SceneDebugger::_msg_inject_input_event(const Array &p_args) {
 
 Error SceneDebugger::_msg_inject_input_action(const Array &p_args) {
 	ERR_FAIL_COND_V(p_args.size() != 3 || p_args[0].get_type() != Variant::STRING_NAME ||
-			p_args[1].get_type() != Variant::BOOL || (p_args[2].get_type() != Variant::FLOAT && p_args[2].get_type() != Variant::INT), ERR_INVALID_DATA);
+					p_args[1].get_type() != Variant::BOOL || (p_args[2].get_type() != Variant::FLOAT && p_args[2].get_type() != Variant::INT),
+			ERR_INVALID_DATA);
 	const StringName action = p_args[0];
 	const bool pressed = p_args[1];
 	const float strength = p_args[2];

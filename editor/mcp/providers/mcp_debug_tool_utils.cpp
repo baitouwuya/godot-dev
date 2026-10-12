@@ -30,7 +30,7 @@
 
 #include "mcp_debug_tool_utils.h"
 
-#include "mcp_tool_utils.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
 
 namespace {
 
@@ -151,8 +151,7 @@ Dictionary query_output_schema(bool p_errors_only) {
 	properties["truncated"] = MCPToolUtils::make_property_schema("boolean", "Whether additional matching groups were omitted.");
 	const String collection_name = p_errors_only ? "errors" : "groups";
 	properties[collection_name] = _object_array_schema(p_errors_only ? "Structured warning and error groups." : "Structured log groups.");
-	return MCPToolUtils::make_object_schema(properties, PackedStringArray{
-			"generation", "nextSequence", "storeHighWatermark", "dropped", "rawCount", "groupCount", "truncated", collection_name });
+	return MCPToolUtils::make_object_schema(properties, PackedStringArray{ "generation", "nextSequence", "storeHighWatermark", "dropped", "rawCount", "groupCount", "truncated", collection_name });
 }
 
 Dictionary latest_log_output_schema() {

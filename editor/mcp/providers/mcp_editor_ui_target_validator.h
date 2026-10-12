@@ -30,7 +30,7 @@
 
 #pragma once
 
-#include "mcp_editor_ui_types.h"
+#include "editor/mcp/providers/mcp_editor_ui_types.h"
 
 class Control;
 class Node;

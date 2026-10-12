@@ -1,16 +1,34 @@
 /**************************************************************************/
-/*  mcp_gdextension_build_service.cpp                                    */
+/*  mcp_gdextension_build_service.cpp                                     */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
 #include "mcp_gdextension_build_service.h"
-
-#include "mcp_path_utils.h"
-#include "mcp_gdextension_profile_registry.h"
-#include "mcp_project_revision.h"
-#include "mcp_tool_utils.h"
 
 #include "core/config/project_settings.h"
 #include "core/extension/gdextension_library_loader.h"
@@ -18,6 +36,10 @@
 #include "core/io/config_file.h"
 #include "core/io/dir_access.h"
 #include "core/os/os.h"
+#include "editor/mcp/providers/mcp_gdextension_profile_registry.h"
+#include "editor/mcp/providers/mcp_path_utils.h"
+#include "editor/mcp/providers/mcp_project_revision.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
 #include "editor/run/editor_run_bar.h"
 
 namespace {
@@ -244,13 +266,13 @@ void MCPGDExtensionBuildService::_finish_process(BuildRecord &r_job) {
 				r_job.failure_code = "RELOAD_FAILED_ROLLED_BACK";
 				r_job.failure_message = "The GDExtension could not be hot-reloaded; the previous artifact state was restored.";
 				r_job.artifact_sha256 = FileAccess::exists(r_job.artifact_absolute_path) &&
-					FileAccess::get_size(r_job.artifact_absolute_path) > 0 ?
-							FileAccess::get_sha256(r_job.artifact_absolute_path) :
-							String();
+								FileAccess::get_size(r_job.artifact_absolute_path) > 0
+						? FileAccess::get_sha256(r_job.artifact_absolute_path)
+						: String();
 			} else {
 				r_job.failure_code = "RELOAD_FAILED_ROLLBACK_INCOMPLETE";
 				r_job.failure_message =
-					"The GDExtension could not be hot-reloaded, and restoring the previous artifact state failed.";
+						"The GDExtension could not be hot-reloaded, and restoring the previous artifact state failed.";
 				r_job.artifact_sha256 = String();
 			}
 			return;
@@ -301,7 +323,7 @@ Dictionary MCPGDExtensionBuildService::build(const Dictionary &p_arguments, cons
 	}
 	String unknown_argument;
 	if (!MCPToolUtils::has_only_arguments(p_arguments,
-			PackedStringArray{ "extensionPath", "profile", "clean", "reload", "timeoutMs", "expectedProjectRevision" }, unknown_argument)) {
+				PackedStringArray{ "extensionPath", "profile", "clean", "reload", "timeoutMs", "expectedProjectRevision" }, unknown_argument)) {
 		return _error("INVALID_ARGUMENTS", "Unknown godot.gdextension.build argument: " + unknown_argument);
 	}
 	for (const KeyValue<String, BuildRecord> &entry : jobs) {

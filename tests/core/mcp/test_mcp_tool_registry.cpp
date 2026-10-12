@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -93,7 +93,7 @@ TEST_CASE("[MCP][ToolRegistry] Closed schemas reject unknown arguments with vali
 	REQUIRE(registry.register_tool(definition, callable_mp(provider, &ToolProvider::echo), provider) == OK);
 
 	Dictionary arguments;
-	arguments["alpah"] = true;
+	arguments["alpah"] = true; // codespell:ignore alpah
 	MCPToolCallContext context;
 	const MCPToolRegistry::CallResult result = registry.call_tool("closed", arguments, context);
 	REQUIRE(result.status == MCPToolRegistry::CALL_OK);
@@ -104,7 +104,7 @@ TEST_CASE("[MCP][ToolRegistry] Closed schemas reject unknown arguments with vali
 	CHECK(error.get("code", String()) == "INVALID_ARGUMENTS");
 	CHECK(String(error.get("message", String())).contains("Valid arguments: alpha, zeta."));
 	const Dictionary details = error.get("details", Dictionary());
-	CHECK(details.get("unknownArgument", String()) == "alpah");
+	CHECK(details.get("unknownArgument", String()) == "alpah"); // codespell:ignore alpah
 	CHECK(PackedStringArray(details.get("validArguments", PackedStringArray())) == PackedStringArray{ "alpha", "zeta" });
 	CHECK(details.get("keyword", String()) == "additionalProperties");
 	CHECK(String(details.get("instancePath", String())).is_empty());

@@ -3,6 +3,7 @@
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
 /**************************************************************************/
 /* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
 /* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
@@ -29,8 +30,6 @@
 
 #pragma once
 
-#include "mcp_http_parser.h"
-
 #include "core/io/tcp_server.h"
 #include "core/os/mutex.h"
 #include "core/os/thread.h"
@@ -38,6 +37,7 @@
 #include "core/templates/safe_refcount.h"
 #include "core/templates/vector.h"
 #include "core/variant/dictionary.h"
+#include "editor/mcp/mcp_http_parser.h"
 
 struct MCPHTTPResponse {
 	int status = 200;

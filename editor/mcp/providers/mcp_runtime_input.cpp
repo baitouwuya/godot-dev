@@ -30,10 +30,9 @@
 
 #include "mcp_runtime_input.h"
 
-#include "mcp_tool_utils.h"
-
 #include "core/input/input_event.h"
 #include "core/input/input_event_codec.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
 
 namespace {
 

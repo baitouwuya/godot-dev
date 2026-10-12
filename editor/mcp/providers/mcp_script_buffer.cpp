@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -30,11 +30,10 @@
 
 #include "mcp_script_buffer.h"
 
-#include "mcp_script_editor_gateway.h"
-#include "mcp_script_path_resolver.h"
-#include "mcp_script_revision.h"
-#include "mcp_script_snapshot_reader.h"
-
+#include "editor/mcp/providers/mcp_script_editor_gateway.h"
+#include "editor/mcp/providers/mcp_script_path_resolver.h"
+#include "editor/mcp/providers/mcp_script_revision.h"
+#include "editor/mcp/providers/mcp_script_snapshot_reader.h"
 #include "editor/script/script_editor_base.h"
 #include "editor/script/script_editor_plugin.h"
 #include "scene/gui/code_edit.h"

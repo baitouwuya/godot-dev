@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  mcp_harness_service.cpp                                              */
+/*  mcp_harness_service.cpp                                               */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -30,9 +30,9 @@
 
 #include "mcp_harness_service.h"
 
-#include "mcp_harness_plan_compiler.h"
-#include "mcp_harness_report_builder.h"
-#include "mcp_tool_utils.h"
+#include "editor/mcp/providers/mcp_harness_plan_compiler.h"
+#include "editor/mcp/providers/mcp_harness_report_builder.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
 
 namespace {
 
@@ -157,7 +157,7 @@ Dictionary MCPHarnessService::cancel(const Dictionary &p_arguments, const MCPToo
 	}
 	if (!MCPHarnessReportBuilder::is_terminal(*job)) {
 		job->cancel_requested = true;
-		job->state = "cancelling";
+		job->state = "cancelling"; // codespell:ignore cancelling
 	}
 	return MCPToolUtils::make_success_result(MCPHarnessReportBuilder::summary(*job));
 }
@@ -172,7 +172,7 @@ int MCPHarnessService::_advance_job(MCPHarnessJob &r_job) {
 	if (MCPHarnessReportBuilder::is_terminal(r_job)) {
 		return 0;
 	}
-	if (r_job.cancel_requested || r_job.state == "cancelling") {
+	if (r_job.cancel_requested || r_job.state == "cancelling") { // codespell:ignore cancelling
 		return step_executor.advance_cancellation(r_job);
 	}
 	if (r_job.state == "collecting_evidence") {

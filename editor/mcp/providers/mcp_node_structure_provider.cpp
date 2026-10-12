@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -30,18 +30,17 @@
 
 #include "mcp_node_structure_provider.h"
 
-#include "mcp_node_structure_operations.h"
-#include "mcp_node_tool_utils.h"
-#include "mcp_path_utils.h"
-#include "mcp_scene_utils.h"
-#include "mcp_tool_utils.h"
-#include "mcp_undo_redo_action.h"
-
 #include "core/io/file_access.h"
 #include "core/io/resource_loader.h"
 #include "core/mcp/mcp_tool_registry.h"
 #include "core/object/callable_mp.h"
 #include "editor/editor_undo_redo_manager.h"
+#include "editor/mcp/providers/mcp_node_structure_operations.h"
+#include "editor/mcp/providers/mcp_node_tool_utils.h"
+#include "editor/mcp/providers/mcp_path_utils.h"
+#include "editor/mcp/providers/mcp_scene_utils.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
+#include "editor/mcp/providers/mcp_undo_redo_action.h"
 #include "scene/main/node.h"
 #include "scene/resources/packed_scene.h"
 

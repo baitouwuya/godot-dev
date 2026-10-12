@@ -30,14 +30,13 @@
 
 #include "mcp_runtime_debug_service.h"
 
-#include "mcp_path_utils.h"
-#include "mcp_tool_utils.h"
-
 #include "core/config/project_settings.h"
 #include "core/io/resource_loader.h"
 #include "editor/debugger/editor_debugger_node.h"
 #include "editor/debugger/script_editor_debugger.h"
 #include "editor/editor_node.h"
+#include "editor/mcp/providers/mcp_path_utils.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
 #include "editor/run/editor_run_bar.h"
 #include "scene/resources/packed_scene.h"
 
@@ -84,10 +83,10 @@ MCPRuntimeJobService::Config _performance_job_config() {
 MCPRuntimeDebugService::MCPRuntimeDebugService(MCPDebugCapture *p_debug_capture) :
 		runtime_gateway(p_debug_capture),
 		observation_service(&runtime_gateway),
-			remote_scene_service(&runtime_gateway),
-			condition_jobs(&runtime_gateway, _condition_job_config()),
-			performance_jobs(&runtime_gateway, _performance_job_config()),
-			input_service(&runtime_gateway),
+		remote_scene_service(&runtime_gateway),
+		condition_jobs(&runtime_gateway, _condition_job_config()),
+		performance_jobs(&runtime_gateway, _performance_job_config()),
+		input_service(&runtime_gateway),
 		target_action_service(&runtime_gateway, &input_service) {
 }
 

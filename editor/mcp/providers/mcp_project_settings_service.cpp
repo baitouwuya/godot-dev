@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  mcp_project_settings_service.cpp                                     */
+/*  mcp_project_settings_service.cpp                                      */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -30,13 +30,12 @@
 
 #include "mcp_project_settings_service.h"
 
-#include "mcp_project_settings_mutation.h"
-#include "mcp_project_revision.h"
-#include "mcp_tool_utils.h"
-#include "mcp_variant_codec.h"
-
 #include "core/config/project_settings.h"
 #include "core/io/file_access.h"
+#include "editor/mcp/providers/mcp_project_revision.h"
+#include "editor/mcp/providers/mcp_project_settings_mutation.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
+#include "editor/mcp/providers/mcp_variant_codec.h"
 
 namespace {
 

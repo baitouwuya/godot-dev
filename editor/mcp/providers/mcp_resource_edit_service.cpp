@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  mcp_resource_edit_service.cpp                                        */
+/*  mcp_resource_edit_service.cpp                                         */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -30,10 +30,6 @@
 
 #include "mcp_resource_edit_service.h"
 
-#include "mcp_path_utils.h"
-#include "mcp_tool_utils.h"
-#include "mcp_variant_codec.h"
-
 #include "core/io/file_access.h"
 #include "core/io/resource_loader.h"
 #include "core/io/resource_saver.h"
@@ -41,6 +37,9 @@
 #include "editor/editor_node.h"
 #include "editor/editor_undo_redo_manager.h"
 #include "editor/file_system/editor_file_system.h"
+#include "editor/mcp/providers/mcp_path_utils.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
+#include "editor/mcp/providers/mcp_variant_codec.h"
 
 MCPResourceEditService::MCPResourceEditService(const String &p_project_root) :
 		project_root(p_project_root) {

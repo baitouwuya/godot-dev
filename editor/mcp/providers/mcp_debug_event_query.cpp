@@ -30,9 +30,8 @@
 
 #include "mcp_debug_event_query.h"
 
-#include "mcp_tool_utils.h"
-
 #include "core/config/project_settings.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
 
 namespace {
 

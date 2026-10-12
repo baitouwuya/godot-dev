@@ -718,9 +718,7 @@ if env["scu_build"]:
     if read_scu_limit != 0:
         max_includes_per_scu = read_scu_limit
 
-    methods.set_scu_folders(
-        scu_builders.generate_scu_files(max_includes_per_scu, env.mcp_runtime_enabled)
-    )
+    methods.set_scu_folders(scu_builders.generate_scu_files(max_includes_per_scu, env.mcp_runtime_enabled))
 
 # Must happen after the flags' definition, as configure is when most flags
 # are actually handled to change compile options, etc.

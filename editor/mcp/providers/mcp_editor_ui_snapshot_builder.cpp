@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  mcp_editor_ui_snapshot_builder.cpp                                   */
+/*  mcp_editor_ui_snapshot_builder.cpp                                    */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */

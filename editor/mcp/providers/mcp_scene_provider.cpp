@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -30,10 +30,6 @@
 
 #include "mcp_scene_provider.h"
 
-#include "mcp_scene_tool_utils.h"
-#include "mcp_scene_utils.h"
-#include "mcp_tool_utils.h"
-
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
 #include "core/mcp/mcp_tool_registry.h"
@@ -41,6 +37,9 @@
 #include "editor/editor_data.h"
 #include "editor/editor_interface.h"
 #include "editor/editor_node.h"
+#include "editor/mcp/providers/mcp_scene_tool_utils.h"
+#include "editor/mcp/providers/mcp_scene_utils.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
 #include "scene/main/node.h"
 
 namespace {

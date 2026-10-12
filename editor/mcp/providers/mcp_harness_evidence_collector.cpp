@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  mcp_harness_evidence_collector.cpp                                   */
+/*  mcp_harness_evidence_collector.cpp                                    */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -30,9 +30,9 @@
 
 #include "mcp_harness_evidence_collector.h"
 
-#include "mcp_harness_report_builder.h"
-#include "mcp_tool_utils.h"
-#include "mcp_trace_service.h"
+#include "editor/mcp/providers/mcp_harness_report_builder.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
+#include "editor/mcp/providers/mcp_trace_service.h"
 
 void MCPHarnessEvidenceCollector::set_trace_service(MCPTraceService *p_service, const Dictionary &p_project_metadata, const String &p_root_directory_override) {
 	trace_service = p_service;

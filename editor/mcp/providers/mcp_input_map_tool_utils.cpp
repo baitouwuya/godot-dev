@@ -30,7 +30,7 @@
 
 #include "mcp_input_map_tool_utils.h"
 
-#include "mcp_tool_utils.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
 
 namespace {
 

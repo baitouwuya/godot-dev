@@ -3,13 +3,14 @@
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
 /**************************************************************************/
 /* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
 /* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -29,33 +30,33 @@
 
 #include "mcp_builtin_features.h"
 
-#include "providers/mcp_autoload_provider.h"
-#include "providers/mcp_automation_provider.h"
-#include "providers/mcp_class_provider.h"
-#include "providers/mcp_debug_capture.h"
-#include "providers/mcp_debug_event_store.h"
-#include "providers/mcp_debug_provider.h"
-#include "providers/mcp_editor_provider.h"
-#include "providers/mcp_editor_ui_provider.h"
-#include "providers/mcp_file_provider.h"
-#include "providers/mcp_gdextension_provider.h"
-#include "providers/mcp_harness_provider.h"
-#include "providers/mcp_input_map_provider.h"
-#include "providers/mcp_node_provider.h"
-#include "providers/mcp_node_structure_provider.h"
-#include "providers/mcp_project_provider.h"
-#include "providers/mcp_resource_provider.h"
-#include "providers/mcp_runtime_debug_service.h"
-#include "providers/mcp_runtime_provider.h"
-#include "providers/mcp_scene_provider.h"
-#include "providers/mcp_trace_service.h"
+#include "editor/mcp/providers/mcp_autoload_provider.h"
+#include "editor/mcp/providers/mcp_automation_provider.h"
+#include "editor/mcp/providers/mcp_class_provider.h"
+#include "editor/mcp/providers/mcp_debug_capture.h"
+#include "editor/mcp/providers/mcp_debug_event_store.h"
+#include "editor/mcp/providers/mcp_debug_provider.h"
+#include "editor/mcp/providers/mcp_editor_provider.h"
+#include "editor/mcp/providers/mcp_editor_ui_provider.h"
+#include "editor/mcp/providers/mcp_file_provider.h"
+#include "editor/mcp/providers/mcp_gdextension_provider.h"
+#include "editor/mcp/providers/mcp_harness_provider.h"
+#include "editor/mcp/providers/mcp_input_map_provider.h"
+#include "editor/mcp/providers/mcp_node_provider.h"
+#include "editor/mcp/providers/mcp_node_structure_provider.h"
+#include "editor/mcp/providers/mcp_project_provider.h"
+#include "editor/mcp/providers/mcp_resource_provider.h"
+#include "editor/mcp/providers/mcp_runtime_debug_service.h"
+#include "editor/mcp/providers/mcp_runtime_provider.h"
+#include "editor/mcp/providers/mcp_scene_provider.h"
+#include "editor/mcp/providers/mcp_trace_service.h"
 
 #include "modules/modules_enabled.gen.h"
 
 #if defined(MODULE_GDSCRIPT_ENABLED) && !defined(GDSCRIPT_NO_LSP)
-#include "providers/mcp_gdscript_provider.h"
-#include "providers/mcp_gdscript_session_manager.h"
-#include "providers/mcp_script_provider.h"
+#include "editor/mcp/providers/mcp_gdscript_provider.h"
+#include "editor/mcp/providers/mcp_gdscript_session_manager.h"
+#include "editor/mcp/providers/mcp_script_provider.h"
 
 #include "modules/gdscript/language_server/gdscript_language_protocol.h"
 #endif

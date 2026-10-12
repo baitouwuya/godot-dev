@@ -30,9 +30,8 @@
 
 #pragma once
 
-#include "mcp_debug_event_store.h"
-
 #include "core/variant/dictionary.h"
+#include "editor/mcp/providers/mcp_debug_event_store.h"
 
 namespace MCPDebugEventQuery {
 

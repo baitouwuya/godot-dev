@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  test_mcp_harness_provider.cpp                                        */
+/*  test_mcp_harness_provider.cpp                                         */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -300,7 +300,7 @@ TEST_CASE("[MCP][Harness] Cancel asynchronously releases an active child") {
 	const String job_id = Dictionary(result.result.get("structuredContent", Dictionary())).get("jobId", String());
 	CHECK(fixture.provider->poll() == 1);
 	result = fixture.call("godot.runtime.harness.cancel", _job_arguments(job_id));
-	CHECK(Dictionary(result.result.get("structuredContent", Dictionary())).get("state", String()) == "cancelling");
+	CHECK(Dictionary(result.result.get("structuredContent", Dictionary())).get("state", String()) == "cancelling"); // codespell:ignore cancelling
 	CHECK(fixture.tools->cancel_count == 0);
 	CHECK(fixture.provider->poll() == 1);
 	CHECK(fixture.tools->cancel_count == 1);

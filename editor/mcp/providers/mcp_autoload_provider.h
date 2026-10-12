@@ -30,10 +30,9 @@
 
 #pragma once
 
-#include "../mcp_editor_feature.h"
-
 #include "core/object/object.h"
 #include "core/variant/dictionary.h"
+#include "editor/mcp/mcp_editor_feature.h"
 
 class MCPToolRegistry;
 

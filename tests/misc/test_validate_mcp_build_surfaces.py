@@ -9,7 +9,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR_PATH = REPOSITORY_ROOT / "misc/scripts/validate_mcp_build_surfaces.py"
 SPEC = importlib.util.spec_from_file_location("validate_mcp_build_surfaces", VALIDATOR_PATH)
@@ -48,7 +47,7 @@ class MCPBuildSurfaceTest(unittest.TestCase):
         self.assertEqual(VALIDATOR.validate_mcp_build_surfaces(self.root), [])
 
     def test_mcp_option_must_remain_tristate(self) -> None:
-        self.replace('SConstruct', '["auto", "no", "yes"]', '["no", "yes"]')
+        self.replace("SConstruct", '["auto", "no", "yes"]', '["no", "yes"]')
 
         violations = VALIDATOR.validate_mcp_build_surfaces(self.root)
 
@@ -56,13 +55,13 @@ class MCPBuildSurfaceTest(unittest.TestCase):
 
     def test_release_template_rejection_is_required(self) -> None:
         self.replace(
-            'SConstruct',
+            "SConstruct",
             'if env["target"] == "template_release" and env["mcp"]:\n'
             '    print_error("The embedded MCP development tools cannot be enabled in release templates.")\n'
-            '    Exit(255)',
+            "    Exit(255)",
             'if env["target"] == "template_release" and env["mcp"]:\n'
             '    print_error("The embedded MCP development tools cannot be enabled in release templates.")\n'
-            '    Exit(0)',
+            "    Exit(0)",
         )
 
         violations = VALIDATOR.validate_mcp_build_surfaces(self.root)
@@ -70,7 +69,7 @@ class MCPBuildSurfaceTest(unittest.TestCase):
         self.assertIn("release-rejection", [violation.gate for violation in violations])
 
     def test_core_mcp_requires_both_editor_and_mcp_guards(self) -> None:
-        self.replace('core/SCsub', 'if env.mcp_editor_enabled:', 'if env["mcp"]:')
+        self.replace("core/SCsub", "if env.mcp_editor_enabled:", 'if env["mcp"]:')
 
         violations = VALIDATOR.validate_mcp_build_surfaces(self.root)
 
@@ -88,8 +87,8 @@ class MCPBuildSurfaceTest(unittest.TestCase):
         self.assertIn("gdscript-lsp-source-gate", [violation.gate for violation in violations])
 
     def test_cli_and_runtime_prefix_filters_are_contracts(self) -> None:
-        self.replace('main/SCsub', 'startswith("mcp_")', 'startswith("optional_")')
-        self.replace('scene/debugger/SCsub', 'startswith("mcp_runtime_")', 'startswith("optional_runtime_")')
+        self.replace("main/SCsub", 'startswith("mcp_")', 'startswith("optional_")')
+        self.replace("scene/debugger/SCsub", 'startswith("mcp_runtime_")', 'startswith("optional_runtime_")')
 
         violations = VALIDATOR.validate_mcp_build_surfaces(self.root)
         gates = [violation.gate for violation in violations]
@@ -99,8 +98,8 @@ class MCPBuildSurfaceTest(unittest.TestCase):
 
     def test_editor_mcp_tests_follow_the_product_surface(self) -> None:
         self.replace(
-            'tests/SCsub',
-            'editor_mcp_enabled = env.mcp_editor_enabled',
+            "tests/SCsub",
+            "editor_mcp_enabled = env.mcp_editor_enabled",
             'editor_mcp_enabled = env["mcp"]',
         )
 
@@ -109,7 +108,7 @@ class MCPBuildSurfaceTest(unittest.TestCase):
         self.assertIn("test-source-gate", [violation.gate for violation in violations])
 
     def test_mcp_profile_loading_preserves_command_line_precedence(self) -> None:
-        self.replace('SConstruct', 'Variables(customs, ARGUMENTS)', 'Variables(customs, {})')
+        self.replace("SConstruct", "Variables(customs, ARGUMENTS)", "Variables(customs, {})")
 
         violations = VALIDATOR.validate_mcp_build_surfaces(self.root)
 
@@ -117,7 +116,7 @@ class MCPBuildSurfaceTest(unittest.TestCase):
 
     def test_mcp_surfaces_are_resolved_separately(self) -> None:
         self.replace(
-            'SConstruct',
+            "SConstruct",
             'env.mcp_runtime_enabled = env.debug_features and env["mcp"]',
             'env.mcp_runtime_enabled = env["mcp"]',
         )
@@ -128,7 +127,7 @@ class MCPBuildSurfaceTest(unittest.TestCase):
 
     def test_runtime_test_allowlist_is_part_of_the_build_contract(self) -> None:
         self.replace(
-            'tests/SCsub',
+            "tests/SCsub",
             '"editor/mcp/test_mcp_runtime_performance_sampler.cpp",',
             '"editor/mcp/test_mcp_runtime_removed.cpp",',
         )
@@ -139,9 +138,9 @@ class MCPBuildSurfaceTest(unittest.TestCase):
 
     def test_scu_tests_use_the_selected_mcp_sources(self) -> None:
         self.replace(
-            'tests/SCsub',
-            'mcp_test_sources = [source for source in force_link_sources if is_mcp_test_source(source)]',
-            'mcp_test_sources = []',
+            "tests/SCsub",
+            "mcp_test_sources = [source for source in force_link_sources if is_mcp_test_source(source)]",
+            "mcp_test_sources = []",
         )
 
         violations = VALIDATOR.validate_mcp_build_surfaces(self.root)
@@ -150,9 +149,9 @@ class MCPBuildSurfaceTest(unittest.TestCase):
 
     def test_scu_runtime_generation_receives_the_runtime_surface(self) -> None:
         self.replace(
-            'SConstruct',
-            'scu_builders.generate_scu_files(max_includes_per_scu, env.mcp_runtime_enabled)',
-            'scu_builders.generate_scu_files(max_includes_per_scu)',
+            "SConstruct",
+            "scu_builders.generate_scu_files(max_includes_per_scu, env.mcp_runtime_enabled)",
+            "scu_builders.generate_scu_files(max_includes_per_scu)",
         )
 
         violations = VALIDATOR.validate_mcp_build_surfaces(self.root)
@@ -161,9 +160,9 @@ class MCPBuildSurfaceTest(unittest.TestCase):
 
     def test_scu_generator_excludes_runtime_sources_when_disabled(self) -> None:
         self.replace(
-            'scu_builders.py',
+            "scu_builders.py",
             'excluded_file_prefixes=() if mcp_runtime_enabled else ("mcp_runtime_",)',
-            'excluded_file_prefixes=()',
+            "excluded_file_prefixes=()",
         )
 
         violations = VALIDATOR.validate_mcp_build_surfaces(self.root)
@@ -171,7 +170,7 @@ class MCPBuildSurfaceTest(unittest.TestCase):
         self.assertIn("scu-runtime-source-gate", [violation.gate for violation in violations])
 
     def test_scu_tests_include_core_debugger_sources(self) -> None:
-        self.replace('scu_builders.py', '"/core/debugger",', '"/core/input",')
+        self.replace("scu_builders.py", '"/core/debugger",', '"/core/input",')
 
         violations = VALIDATOR.validate_mcp_build_surfaces(self.root)
 
@@ -179,9 +178,9 @@ class MCPBuildSurfaceTest(unittest.TestCase):
 
     def test_scene_debugger_preserves_scu_aggregation(self) -> None:
         self.replace(
-            'scene/debugger/SCsub',
+            "scene/debugger/SCsub",
             'if env.mcp_runtime_enabled or env["scu_build"]:',
-            'if env.mcp_runtime_enabled:',
+            "if env.mcp_runtime_enabled:",
         )
 
         violations = VALIDATOR.validate_mcp_build_surfaces(self.root)

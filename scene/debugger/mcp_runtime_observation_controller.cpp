@@ -30,9 +30,8 @@
 
 #include "mcp_runtime_observation_controller.h"
 
-#include "mcp_runtime_observation.h"
-
 #include "core/debugger/engine_debugger.h"
+#include "scene/debugger/mcp_runtime_observation.h"
 
 void MCPRuntimeObservationController::_bind_methods() {
 }

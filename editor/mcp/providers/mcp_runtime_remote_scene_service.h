@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  mcp_runtime_remote_scene_service.h                                   */
+/*  mcp_runtime_remote_scene_service.h                                    */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -30,7 +30,7 @@
 
 #pragma once
 
-#include "mcp_runtime_debugger_gateway.h"
+#include "editor/mcp/providers/mcp_runtime_debugger_gateway.h"
 
 class ScriptEditorDebugger;
 

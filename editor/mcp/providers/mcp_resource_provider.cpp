@@ -3,13 +3,14 @@
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
 /**************************************************************************/
 /* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
 /* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -29,11 +30,10 @@
 
 #include "mcp_resource_provider.h"
 
-#include "mcp_resource_tool_utils.h"
-#include "mcp_tool_utils.h"
-
 #include "core/mcp/mcp_tool_registry.h"
 #include "core/object/callable_mp.h"
+#include "editor/mcp/providers/mcp_resource_tool_utils.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
 
 namespace {
 
@@ -68,16 +68,16 @@ Error MCPResourceProvider::register_tools(MCPToolRegistry *p_registry, String *r
 	}
 
 	const LocalVector<MCPToolUtils::ToolDescriptor> tools{
-			{ "godot.resource.get_properties", "Get editable Inspector properties from a cached project Resource.",
-					MCPResourceToolUtils::path_schema(), MCPToolUtils::TOOL_READ_ONLY, callable_mp(this, &MCPResourceProvider::get_properties), MCPResourceToolUtils::get_properties_output_schema() },
-			{ "godot.resource.set_property", "Set a cached project Resource property without saving it.",
-					MCPResourceToolUtils::set_property_schema(), MCPToolUtils::TOOL_DESTRUCTIVE, callable_mp(this, &MCPResourceProvider::set_property), MCPResourceToolUtils::set_property_output_schema() },
-			{ "godot.resource.save", "Explicitly save a cached project Resource.",
-					MCPResourceToolUtils::path_schema(), MCPToolUtils::TOOL_DESTRUCTIVE, callable_mp(this, &MCPResourceProvider::save), MCPResourceToolUtils::save_output_schema() },
-			{ "godot.resource.import_options", "List ResourceImporter candidates and effective import options for an external asset.",
-					MCPResourceToolUtils::import_options_schema(false), MCPToolUtils::TOOL_READ_ONLY, callable_mp(this, &MCPResourceProvider::import_options), MCPResourceToolUtils::import_options_output_schema() },
-			{ "godot.resource.import", "Copy an external asset into the project, roll back known target-owned artifacts, and report unowned residuals.",
-					MCPResourceToolUtils::import_options_schema(true), MCPToolUtils::TOOL_DESTRUCTIVE, callable_mp(this, &MCPResourceProvider::import_resource), MCPResourceToolUtils::import_output_schema() },
+		{ "godot.resource.get_properties", "Get editable Inspector properties from a cached project Resource.",
+				MCPResourceToolUtils::path_schema(), MCPToolUtils::TOOL_READ_ONLY, callable_mp(this, &MCPResourceProvider::get_properties), MCPResourceToolUtils::get_properties_output_schema() },
+		{ "godot.resource.set_property", "Set a cached project Resource property without saving it.",
+				MCPResourceToolUtils::set_property_schema(), MCPToolUtils::TOOL_DESTRUCTIVE, callable_mp(this, &MCPResourceProvider::set_property), MCPResourceToolUtils::set_property_output_schema() },
+		{ "godot.resource.save", "Explicitly save a cached project Resource.",
+				MCPResourceToolUtils::path_schema(), MCPToolUtils::TOOL_DESTRUCTIVE, callable_mp(this, &MCPResourceProvider::save), MCPResourceToolUtils::save_output_schema() },
+		{ "godot.resource.import_options", "List ResourceImporter candidates and effective import options for an external asset.",
+				MCPResourceToolUtils::import_options_schema(false), MCPToolUtils::TOOL_READ_ONLY, callable_mp(this, &MCPResourceProvider::import_options), MCPResourceToolUtils::import_options_output_schema() },
+		{ "godot.resource.import", "Copy an external asset into the project, roll back known target-owned artifacts, and report unowned residuals.",
+				MCPResourceToolUtils::import_options_schema(true), MCPToolUtils::TOOL_DESTRUCTIVE, callable_mp(this, &MCPResourceProvider::import_resource), MCPResourceToolUtils::import_output_schema() },
 	};
 	const Error error = MCPToolUtils::register_tools(p_registry, this, tools, r_error);
 	if (error != OK) {

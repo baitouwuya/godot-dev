@@ -30,13 +30,12 @@
 
 #include "mcp_runtime_provider.h"
 
-#include "mcp_runtime_debug_service.h"
-#include "mcp_runtime_output_schemas.h"
-#include "mcp_runtime_tool_schemas.h"
-#include "mcp_tool_utils.h"
-
 #include "core/mcp/mcp_tool_registry.h"
 #include "core/object/callable_mp.h"
+#include "editor/mcp/providers/mcp_runtime_debug_service.h"
+#include "editor/mcp/providers/mcp_runtime_output_schemas.h"
+#include "editor/mcp/providers/mcp_runtime_tool_schemas.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
 
 namespace {
 

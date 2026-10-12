@@ -3,6 +3,7 @@
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
 /**************************************************************************/
 /* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
 /* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
@@ -29,13 +30,12 @@
 
 #pragma once
 
-#include "mcp_builtin_features.h"
-#include "mcp_host.h"
-#include "mcp_http_health_probe.h"
-#include "mcp_project_heartbeat.h"
-
 #include "core/mcp/mcp_discovery.h"
 #include "core/mcp/mcp_project_lease.h"
+#include "editor/mcp/mcp_builtin_features.h"
+#include "editor/mcp/mcp_host.h"
+#include "editor/mcp/mcp_http_health_probe.h"
+#include "editor/mcp/mcp_project_heartbeat.h"
 #include "editor/plugins/editor_plugin.h"
 
 class ConfirmationDialog;

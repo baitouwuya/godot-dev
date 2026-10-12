@@ -30,11 +30,10 @@
 
 #include "mcp_editor_ui_provider.h"
 
-#include "mcp_editor_ui_tool_utils.h"
-#include "mcp_tool_utils.h"
-
 #include "core/mcp/mcp_tool_registry.h"
 #include "core/object/callable_mp.h"
+#include "editor/mcp/providers/mcp_editor_ui_tool_utils.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
 
 namespace {
 

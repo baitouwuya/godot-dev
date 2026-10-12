@@ -30,11 +30,6 @@
 
 #include "mcp_autoload_provider.h"
 
-#include "mcp_path_utils.h"
-#include "mcp_project_settings_mutation.h"
-#include "mcp_project_tool_utils.h"
-#include "mcp_tool_utils.h"
-
 #include "core/config/project_settings.h"
 #include "core/io/file_access.h"
 #include "core/io/resource_loader.h"
@@ -42,6 +37,10 @@
 #include "core/mcp/mcp_tool_registry.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "editor/mcp/providers/mcp_path_utils.h"
+#include "editor/mcp/providers/mcp_project_settings_mutation.h"
+#include "editor/mcp/providers/mcp_project_tool_utils.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
 #include "editor/settings/editor_autoload_settings.h"
 
 namespace {
@@ -157,9 +156,7 @@ Dictionary MCPAutoloadProvider::add_autoload(const Dictionary &p_arguments, cons
 	String resource_path;
 	String absolute_path;
 	String path_error;
-	const Error path_result = project_root.is_empty() ?
-			MCPPathUtils::resolve_project_file_path(path, resource_path, absolute_path, &path_error) :
-			MCPPathUtils::resolve_project_file_path_for_root(path, project_root, resource_path, absolute_path, &path_error);
+	const Error path_result = project_root.is_empty() ? MCPPathUtils::resolve_project_file_path(path, resource_path, absolute_path, &path_error) : MCPPathUtils::resolve_project_file_path_for_root(path, project_root, resource_path, absolute_path, &path_error);
 	if (path_result != OK || !FileAccess::exists(absolute_path)) {
 		return MCPToolUtils::make_error_result("INVALID_AUTOLOAD_PATH", path_error.is_empty() ? "Autoload resource does not exist." : path_error);
 	}

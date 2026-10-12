@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -202,8 +202,7 @@ static void _collect_parameter_matches(const ExtendGDScriptParser &p_parser, con
 		if ((member.kind == LSP::SymbolKind::Method || member.kind == LSP::SymbolKind::Function || member.kind == LSP::SymbolKind::Event) && member.name == p_callable_name) {
 			for (const LSP::DocumentSymbol &child : member.children) {
 				bool rest = false;
-				const GDScriptParser::ParameterNode *parameter = child.name == p_parameter_name && child.kind == LSP::SymbolKind::Variable ?
-						_find_parameter_node(p_parser, member, child, rest) : nullptr;
+				const GDScriptParser::ParameterNode *parameter = child.name == p_parameter_name && child.kind == LSP::SymbolKind::Variable ? _find_parameter_node(p_parser, member, child, rest) : nullptr;
 				if (parameter) {
 					MCPScriptMemberMatch match;
 					match.symbol = &child;

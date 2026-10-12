@@ -30,16 +30,15 @@
 
 #include "mcp_debug_provider.h"
 
-#include "mcp_debug_event_query.h"
-#include "mcp_debug_event_store.h"
-#include "mcp_debug_stack_query.h"
-#include "mcp_debug_tool_utils.h"
-#include "mcp_log_analyzer.h"
-#include "mcp_project_log_reader.h"
-#include "mcp_tool_utils.h"
-
 #include "core/mcp/mcp_tool_registry.h"
 #include "core/object/callable_mp.h"
+#include "editor/mcp/providers/mcp_debug_event_query.h"
+#include "editor/mcp/providers/mcp_debug_event_store.h"
+#include "editor/mcp/providers/mcp_debug_stack_query.h"
+#include "editor/mcp/providers/mcp_debug_tool_utils.h"
+#include "editor/mcp/providers/mcp_log_analyzer.h"
+#include "editor/mcp/providers/mcp_project_log_reader.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
 
 namespace {
 

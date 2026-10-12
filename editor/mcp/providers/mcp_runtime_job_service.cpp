@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  mcp_runtime_job_service.cpp                                          */
+/*  mcp_runtime_job_service.cpp                                           */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -30,9 +30,8 @@
 
 #include "mcp_runtime_job_service.h"
 
-#include "mcp_tool_utils.h"
-
 #include "core/templates/hash_set.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
 
 namespace {
 
@@ -77,8 +76,7 @@ Dictionary MCPRuntimeJobService::_resolve_record(const Dictionary &p_arguments, 
 	const bool has_job_id = job_value.get_type() == Variant::STRING && !String(job_value).is_empty();
 	const bool has_alias = alias_value.get_type() == Variant::STRING && !String(alias_value).is_empty();
 	if (has_job_id == has_alias) {
-		return _error("INVALID_ARGUMENTS", config.alias_argument.is_empty() ? "jobId must be a non-empty string." :
-				"Provide exactly one of jobId or " + config.alias_argument + ".");
+		return _error("INVALID_ARGUMENTS", config.alias_argument.is_empty() ? "jobId must be a non-empty string." : "Provide exactly one of jobId or " + config.alias_argument + ".");
 	}
 	if (has_job_id) {
 		r_job_id = job_value;

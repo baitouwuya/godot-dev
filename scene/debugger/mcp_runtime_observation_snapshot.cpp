@@ -28,8 +28,7 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
-#include "mcp_runtime_observation.h"
-
+#include "scene/debugger/mcp_runtime_observation.h"
 #include "scene/gui/control.h"
 #include "scene/main/canvas_item.h"
 #include "scene/main/viewport.h"

@@ -10,14 +10,14 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence, cast
 
 
 class SmokeFailure(AssertionError):
     pass
 
 
-def require(condition: bool, message: str) -> None:
+def require(condition: object, message: str) -> None:
     if not condition:
         raise SmokeFailure(f"MCP CLI smoke assertion failed: {message}")
 
@@ -38,7 +38,7 @@ def describe_command_result(result: CommandResult) -> str:
 
 
 def _creation_flags() -> int:
-    return subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    return cast(int, getattr(subprocess, "CREATE_NO_WINDOW")) if os.name == "nt" else 0
 
 
 def _read_log(path: Path) -> str:
@@ -158,7 +158,7 @@ class ProcessRunner:
         if not candidate.is_file():
             resolved = shutil.which(value)
             require(resolved is not None, f"Godot binary was not found: {value}")
-            candidate = Path(resolved)
+            candidate = Path(cast(str, resolved))
         return candidate.resolve()
 
     @staticmethod
@@ -217,11 +217,11 @@ class ProcessRunner:
         )
 
 
-def non_empty_lines(text: str) -> List[str]:
+def non_empty_lines(text: str) -> list[str]:
     return [line for line in text.splitlines() if line.strip()]
 
 
-def load_tool_manifest(path: Path) -> List[str]:
+def load_tool_manifest(path: Path) -> list[str]:
     require(path.is_file(), f"Tool manifest does not exist: {path}")
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
@@ -233,10 +233,10 @@ def load_tool_manifest(path: Path) -> List[str]:
     require(isinstance(tools, list) and tools, "Tool manifest must contain a non-empty tools array.")
     require(all(isinstance(name, str) and name.strip() for name in tools), "Tool manifest contains an invalid name.")
     require(len(set(tools)) == len(tools), "Tool manifest contains duplicate tool names.")
-    return tools
+    return cast(list[str], tools)
 
 
-def parse_discovery(result: CommandResult, label: str) -> Dict[str, Any]:
+def parse_discovery(result: CommandResult, label: str) -> dict[str, Any]:
     require(result.returncode == 0, f"{label} discovery failed: {result.stderr}")
     lines = non_empty_lines(result.stdout)
     require(len(lines) == 1, f"{label} discovery stdout must contain exactly one JSON line: {result.stdout!r}")
@@ -254,22 +254,22 @@ def parse_discovery(result: CommandResult, label: str) -> Dict[str, Any]:
         re.fullmatch(r"http://(?:127\.0\.0\.1|localhost|\[::1\]):[0-9]+/mcp", record["endpoint"]) is not None,
         f"{label} discovery endpoint is not a loopback /mcp URL: {record['endpoint']!r}",
     )
-    return record
+    return cast(dict[str, Any], record)
 
 
 def json_line(value: Mapping[str, Any]) -> str:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
 
 
-def request(request_id: int, method: str, params: Mapping[str, Any]) -> Dict[str, Any]:
+def request(request_id: int, method: str, params: Mapping[str, Any]) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id, "method": method, "params": dict(params)}
 
 
-def notification(method: str, params: Mapping[str, Any]) -> Dict[str, Any]:
+def notification(method: str, params: Mapping[str, Any]) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "method": method, "params": dict(params)}
 
 
-def tool_call(request_id: int, name: str, arguments: Mapping[str, Any]) -> Dict[str, Any]:
+def tool_call(request_id: int, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
     return request(request_id, "tools/call", {"name": name, "arguments": dict(arguments)})
 
 
@@ -278,7 +278,7 @@ def parse_jsonrpc_responses(
     expected_ids: Iterable[int],
     label: str,
     request_descriptions: Optional[Sequence[str]] = None,
-) -> Dict[int, Dict[str, Any]]:
+) -> dict[int, dict[str, Any]]:
     command_result = describe_command_result(result)
     require(result.returncode == 0, f"{label} failed: {command_result}")
     expected = set(expected_ids)
@@ -287,7 +287,7 @@ def parse_jsonrpc_responses(
         len(lines) == len(expected),
         f"{label} produced {len(lines)} responses instead of {len(expected)}: {command_result}",
     )
-    responses: Dict[int, Dict[str, Any]] = {}
+    responses: dict[int, dict[str, Any]] = {}
     for response_index, line in enumerate(lines):
         request_description = (
             request_descriptions[response_index]
@@ -319,7 +319,7 @@ def parse_jsonrpc_responses(
             f"{response!r}; {command_result}",
         )
         require(normalized_id not in responses, f"{label} emitted duplicate response id {normalized_id}.")
-        responses[normalized_id] = response
+        responses[cast(int, normalized_id)] = response
     require(set(responses) == expected, f"{label} response ids differ: {sorted(responses)} != {sorted(expected)}")
     return responses
 
@@ -330,7 +330,7 @@ def invoke_stdio(
     protocol_version: str,
     requests: Sequence[Mapping[str, Any]],
     label: str,
-) -> Dict[int, Dict[str, Any]]:
+) -> dict[int, dict[str, Any]]:
     initialize = request(
         1,
         "initialize",
@@ -346,7 +346,7 @@ def invoke_stdio(
     for item in requests:
         request_id = item.get("id")
         require(type(request_id) is int and request_id != 1, f"{label} contains an invalid or reserved request id.")
-        expected_ids.append(request_id)
+        expected_ids.append(cast(int, request_id))
         method = item.get("method", "<missing method>")
         params = item.get("params")
         tool_name = params.get("name") if isinstance(params, dict) else None

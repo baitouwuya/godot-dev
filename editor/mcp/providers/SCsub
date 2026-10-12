@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from misc.utility.scons_hints import *
 
 import glob
 
@@ -25,9 +26,7 @@ gdscript_lsp_sources = {
 }
 
 gdscript_lsp_enabled = (
-    env["module_gdscript_enabled"]
-    and env["module_jsonrpc_enabled"]
-    and env["module_websocket_enabled"]
+    env["module_gdscript_enabled"] and env["module_jsonrpc_enabled"] and env["module_websocket_enabled"]
 )
 if not gdscript_lsp_enabled:
     sources = [source for source in sources if source not in gdscript_lsp_sources]

@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -30,22 +30,21 @@
 
 #include "mcp_node_provider.h"
 
-#include "mcp_node_inspection.h"
-#include "mcp_node_operations.h"
-#include "mcp_node_tool_utils.h"
-#include "mcp_path_utils.h"
-#include "mcp_scene_tool_utils.h"
-#include "mcp_scene_utils.h"
-#include "mcp_tool_utils.h"
-#include "mcp_undo_redo_action.h"
-#include "mcp_variant_codec.h"
-
 #include "core/io/file_access.h"
 #include "core/io/resource_loader.h"
 #include "core/mcp/mcp_tool_registry.h"
 #include "core/object/callable_mp.h"
 #include "core/object/script_language.h"
 #include "editor/editor_undo_redo_manager.h"
+#include "editor/mcp/providers/mcp_node_inspection.h"
+#include "editor/mcp/providers/mcp_node_operations.h"
+#include "editor/mcp/providers/mcp_node_tool_utils.h"
+#include "editor/mcp/providers/mcp_path_utils.h"
+#include "editor/mcp/providers/mcp_scene_tool_utils.h"
+#include "editor/mcp/providers/mcp_scene_utils.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
+#include "editor/mcp/providers/mcp_undo_redo_action.h"
+#include "editor/mcp/providers/mcp_variant_codec.h"
 #include "scene/main/node.h"
 
 namespace {
@@ -85,26 +84,26 @@ Error MCPNodeProvider::register_tools(MCPToolRegistry *p_registry, String *r_err
 	}
 
 	const LocalVector<MCPToolUtils::ToolDescriptor> tools{
-			{ "godot.node.get_properties", "Get all native and script-exposed node properties marked for editor use.",
-					MCPNodeToolUtils::path_schema(), MCPToolUtils::TOOL_READ_ONLY, callable_mp(this, &MCPNodeProvider::get_properties), MCPNodeToolUtils::node_properties_output_schema() },
-			{ "godot.node.create", "Create a node through editor undo/redo.",
-					MCPNodeToolUtils::create_schema(), MCPToolUtils::TOOL_ADDITIVE, callable_mp(this, &MCPNodeProvider::create), MCPSceneToolUtils::node_summary_schema() },
-			{ "godot.node.set_property", "Set a node property through editor undo/redo.",
-					MCPNodeToolUtils::set_property_schema(), MCPToolUtils::TOOL_DESTRUCTIVE, callable_mp(this, &MCPNodeProvider::set_property), MCPNodeToolUtils::node_property_output_schema() },
-			{ "godot.node.attach_script", "Attach a project script through editor undo/redo.",
-					MCPNodeToolUtils::attach_script_schema(), MCPToolUtils::TOOL_DESTRUCTIVE, callable_mp(this, &MCPNodeProvider::attach_script), MCPNodeToolUtils::attach_script_output_schema() },
-			{ "godot.node.get_groups", "List editable scene groups on a node.",
-					MCPNodeToolUtils::path_schema(), MCPToolUtils::TOOL_READ_ONLY, callable_mp(this, &MCPNodeProvider::get_groups), MCPNodeToolUtils::groups_output_schema() },
-			{ "godot.node.add_to_group", "Add a node to a persistent scene group through editor undo/redo.",
-					MCPNodeToolUtils::group_schema(true), MCPToolUtils::TOOL_ADDITIVE, callable_mp(this, &MCPNodeProvider::add_to_group), MCPNodeToolUtils::group_mutation_output_schema(true) },
-			{ "godot.node.remove_from_group", "Remove a node from a scene group through editor undo/redo.",
-					MCPNodeToolUtils::group_schema(false), MCPToolUtils::TOOL_DESTRUCTIVE, callable_mp(this, &MCPNodeProvider::remove_from_group), MCPNodeToolUtils::group_mutation_output_schema(false) },
-			{ "godot.node.get_signal_connections", "List persistent signal connections from an editable scene node.",
-					MCPNodeToolUtils::signal_connections_schema(), MCPToolUtils::TOOL_READ_ONLY, callable_mp(this, &MCPNodeProvider::get_signal_connections), MCPNodeToolUtils::connections_output_schema() },
-			{ "godot.node.connect_signal", "Create a persistent scene signal connection through editor undo/redo.",
-					MCPNodeToolUtils::signal_mutation_schema(true), MCPToolUtils::TOOL_ADDITIVE, callable_mp(this, &MCPNodeProvider::connect_signal), MCPNodeToolUtils::signal_mutation_output_schema(true) },
-			{ "godot.node.disconnect_signal", "Remove a persistent scene signal connection through editor undo/redo.",
-					MCPNodeToolUtils::signal_mutation_schema(false), MCPToolUtils::TOOL_DESTRUCTIVE, callable_mp(this, &MCPNodeProvider::disconnect_signal), MCPNodeToolUtils::signal_mutation_output_schema(false) },
+		{ "godot.node.get_properties", "Get all native and script-exposed node properties marked for editor use.",
+				MCPNodeToolUtils::path_schema(), MCPToolUtils::TOOL_READ_ONLY, callable_mp(this, &MCPNodeProvider::get_properties), MCPNodeToolUtils::node_properties_output_schema() },
+		{ "godot.node.create", "Create a node through editor undo/redo.",
+				MCPNodeToolUtils::create_schema(), MCPToolUtils::TOOL_ADDITIVE, callable_mp(this, &MCPNodeProvider::create), MCPSceneToolUtils::node_summary_schema() },
+		{ "godot.node.set_property", "Set a node property through editor undo/redo.",
+				MCPNodeToolUtils::set_property_schema(), MCPToolUtils::TOOL_DESTRUCTIVE, callable_mp(this, &MCPNodeProvider::set_property), MCPNodeToolUtils::node_property_output_schema() },
+		{ "godot.node.attach_script", "Attach a project script through editor undo/redo.",
+				MCPNodeToolUtils::attach_script_schema(), MCPToolUtils::TOOL_DESTRUCTIVE, callable_mp(this, &MCPNodeProvider::attach_script), MCPNodeToolUtils::attach_script_output_schema() },
+		{ "godot.node.get_groups", "List editable scene groups on a node.",
+				MCPNodeToolUtils::path_schema(), MCPToolUtils::TOOL_READ_ONLY, callable_mp(this, &MCPNodeProvider::get_groups), MCPNodeToolUtils::groups_output_schema() },
+		{ "godot.node.add_to_group", "Add a node to a persistent scene group through editor undo/redo.",
+				MCPNodeToolUtils::group_schema(true), MCPToolUtils::TOOL_ADDITIVE, callable_mp(this, &MCPNodeProvider::add_to_group), MCPNodeToolUtils::group_mutation_output_schema(true) },
+		{ "godot.node.remove_from_group", "Remove a node from a scene group through editor undo/redo.",
+				MCPNodeToolUtils::group_schema(false), MCPToolUtils::TOOL_DESTRUCTIVE, callable_mp(this, &MCPNodeProvider::remove_from_group), MCPNodeToolUtils::group_mutation_output_schema(false) },
+		{ "godot.node.get_signal_connections", "List persistent signal connections from an editable scene node.",
+				MCPNodeToolUtils::signal_connections_schema(), MCPToolUtils::TOOL_READ_ONLY, callable_mp(this, &MCPNodeProvider::get_signal_connections), MCPNodeToolUtils::connections_output_schema() },
+		{ "godot.node.connect_signal", "Create a persistent scene signal connection through editor undo/redo.",
+				MCPNodeToolUtils::signal_mutation_schema(true), MCPToolUtils::TOOL_ADDITIVE, callable_mp(this, &MCPNodeProvider::connect_signal), MCPNodeToolUtils::signal_mutation_output_schema(true) },
+		{ "godot.node.disconnect_signal", "Remove a persistent scene signal connection through editor undo/redo.",
+				MCPNodeToolUtils::signal_mutation_schema(false), MCPToolUtils::TOOL_DESTRUCTIVE, callable_mp(this, &MCPNodeProvider::disconnect_signal), MCPNodeToolUtils::signal_mutation_output_schema(false) },
 	};
 	const Error err = MCPToolUtils::register_tools(p_registry, this, tools, r_error);
 	if (err != OK) {
@@ -426,9 +425,9 @@ Dictionary MCPNodeProvider::_mutate_signal_connection(const Dictionary &p_argume
 	String operation_error;
 	MCPEditorUndoRedoAction editor_undo_redo(EditorUndoRedoManager::get_singleton());
 	const Error err = p_connect ? MCPNodeOperations::connect_signal(scene_root, source, signal, target, method, flags,
-			undo_redo_override ? undo_redo_override : &editor_undo_redo, &operation_error) :
-			MCPNodeOperations::disconnect_signal(scene_root, source, signal, target, method,
-					undo_redo_override ? undo_redo_override : &editor_undo_redo, &operation_error);
+										  undo_redo_override ? undo_redo_override : &editor_undo_redo, &operation_error)
+								: MCPNodeOperations::disconnect_signal(scene_root, source, signal, target, method,
+										  undo_redo_override ? undo_redo_override : &editor_undo_redo, &operation_error);
 	if (err != OK) {
 		return MCPToolUtils::make_error_result(p_connect ? "SIGNAL_CONNECT_FAILED" : "SIGNAL_DISCONNECT_FAILED", operation_error);
 	}

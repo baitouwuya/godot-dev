@@ -204,7 +204,6 @@ TEST_CASE("[MCP][Provider] Runtime observation responses are correlated by debug
 	CHECK(response.ok);
 	CHECK(response.operation == "query_nodes");
 	CHECK(int(response.data["count"]) == 1);
-
 }
 
 TEST_CASE("[MCP][Provider] Runtime request broker bounds pending work and releases MCP sessions") {

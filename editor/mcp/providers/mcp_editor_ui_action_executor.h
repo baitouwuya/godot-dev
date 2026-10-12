@@ -30,7 +30,7 @@
 
 #pragma once
 
-#include "mcp_editor_ui_types.h"
+#include "editor/mcp/providers/mcp_editor_ui_types.h"
 
 class MCPEditorUIActionExecutor {
 	static bool _try_get_number(const Dictionary &p_arguments, const StringName &p_name, double &r_value);

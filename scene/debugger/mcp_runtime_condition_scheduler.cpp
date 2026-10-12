@@ -30,12 +30,11 @@
 
 #include "mcp_runtime_condition_scheduler.h"
 
-#include "mcp_runtime_observation.h"
-#include "mcp_runtime_screenshot_capture.h"
-
 #include "core/config/engine.h"
 #include "core/debugger/engine_debugger.h"
 #include "core/object/callable_mp.h"
+#include "scene/debugger/mcp_runtime_observation.h"
+#include "scene/debugger/mcp_runtime_screenshot_capture.h"
 #include "scene/main/scene_tree.h"
 #include "scene/main/window.h"
 

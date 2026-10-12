@@ -30,14 +30,13 @@
 
 #pragma once
 
-#include "mcp_runtime_debugger_gateway.h"
-#include "mcp_runtime_input_service.h"
-#include "mcp_runtime_job_service.h"
-#include "mcp_runtime_observation_service.h"
-#include "mcp_runtime_remote_scene_service.h"
-#include "mcp_runtime_target_action_service.h"
-
 #include "core/variant/dictionary.h"
+#include "editor/mcp/providers/mcp_runtime_debugger_gateway.h"
+#include "editor/mcp/providers/mcp_runtime_input_service.h"
+#include "editor/mcp/providers/mcp_runtime_job_service.h"
+#include "editor/mcp/providers/mcp_runtime_observation_service.h"
+#include "editor/mcp/providers/mcp_runtime_remote_scene_service.h"
+#include "editor/mcp/providers/mcp_runtime_target_action_service.h"
 
 class MCPDebugCapture;
 class ScriptEditorDebugger;

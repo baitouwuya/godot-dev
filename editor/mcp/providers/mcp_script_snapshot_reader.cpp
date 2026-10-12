@@ -3,6 +3,7 @@
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
 /**************************************************************************/
 /* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
 /* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
@@ -29,13 +30,12 @@
 
 #include "mcp_script_snapshot_reader.h"
 
-#include "mcp_script_buffer.h"
-#include "mcp_script_editor_gateway.h"
-#include "mcp_script_path_resolver.h"
-
 #include "core/config/project_settings.h"
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
+#include "editor/mcp/providers/mcp_script_buffer.h"
+#include "editor/mcp/providers/mcp_script_editor_gateway.h"
+#include "editor/mcp/providers/mcp_script_path_resolver.h"
 #include "editor/script/script_editor_base.h"
 #include "editor/script/script_editor_plugin.h"
 

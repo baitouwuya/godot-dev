@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -503,24 +503,19 @@ Error render(DocTools *p_docs, const RenderOptions &p_options, Dictionary &r_res
 	const bool full = view == "full";
 	bool matched = member.is_empty();
 	if (section == "all" || section == "constructors") {
-		r_result["constructors"] = _select_members(doc->constructors, member,
-				[full](const DocData::MethodDoc &method) { return _make_method(method, "constructor", full); }, matched);
+		r_result["constructors"] = _select_members(doc->constructors, member, [full](const DocData::MethodDoc &method) { return _make_method(method, "constructor", full); }, matched);
 	}
 	if (section == "all" || section == "methods") {
-		r_result["methods"] = _select_members(doc->methods, member,
-				[full](const DocData::MethodDoc &method) { return _make_method(method, "method", full); }, matched);
+		r_result["methods"] = _select_members(doc->methods, member, [full](const DocData::MethodDoc &method) { return _make_method(method, "method", full); }, matched);
 	}
 	if (section == "all" || section == "operators") {
-		r_result["operators"] = _select_members(doc->operators, member,
-				[full](const DocData::MethodDoc &method) { return _make_method(method, "operator", full); }, matched);
+		r_result["operators"] = _select_members(doc->operators, member, [full](const DocData::MethodDoc &method) { return _make_method(method, "operator", full); }, matched);
 	}
 	if (section == "all" || section == "signals") {
-		r_result["signals"] = _select_members(doc->signals, member,
-				[full](const DocData::MethodDoc &method) { return _make_method(method, "signal", full); }, matched);
+		r_result["signals"] = _select_members(doc->signals, member, [full](const DocData::MethodDoc &method) { return _make_method(method, "signal", full); }, matched);
 	}
 	if (section == "all" || section == "properties") {
-		r_result["properties"] = _select_members(doc->properties, member,
-				[full](const DocData::PropertyDoc &property) { return _make_property(property, full); }, matched);
+		r_result["properties"] = _select_members(doc->properties, member, [full](const DocData::PropertyDoc &property) { return _make_property(property, full); }, matched);
 	}
 	if (section == "all" || section == "constants") {
 		r_result["constants"] = _make_constants(*doc, member, full, matched);
@@ -529,12 +524,10 @@ Error render(DocTools *p_docs, const RenderOptions &p_options, Dictionary &r_res
 		r_result["enums"] = _make_enums(*doc, member, full, matched);
 	}
 	if (section == "all" || section == "themeItems") {
-		r_result["themeItems"] = _select_members(doc->theme_properties, member,
-				[full](const DocData::ThemeItemDoc &item) { return _make_theme_item(item, full); }, matched);
+		r_result["themeItems"] = _select_members(doc->theme_properties, member, [full](const DocData::ThemeItemDoc &item) { return _make_theme_item(item, full); }, matched);
 	}
 	if (section == "all" || section == "annotations") {
-		r_result["annotations"] = _select_members(doc->annotations, member,
-				[full](const DocData::MethodDoc &method) { return _make_method(method, "annotation", full); }, matched);
+		r_result["annotations"] = _select_members(doc->annotations, member, [full](const DocData::MethodDoc &method) { return _make_method(method, "annotation", full); }, matched);
 	}
 	if (!matched) {
 		return _fail("Class member documentation was not found: " + member, r_error, ERR_DOES_NOT_EXIST);

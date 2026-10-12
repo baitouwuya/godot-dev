@@ -3,6 +3,7 @@
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
 /**************************************************************************/
 /* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
 /* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
@@ -147,11 +148,8 @@ public:
 				limits->max_response_bytes,
 				response,
 				cleanup_error);
-		if (error != OK || (response.status_code != HTTPClient::RESPONSE_NO_CONTENT &&
-					response.status_code != HTTPClient::RESPONSE_NOT_FOUND &&
-					response.status_code != HTTPClient::RESPONSE_METHOD_NOT_ALLOWED)) {
-			const String detail = error != OK ? (cleanup_error.is_empty() ? error_names[error] : cleanup_error) :
-					vformat("HTTP endpoint returned status %d.", response.status_code);
+		if (error != OK || (response.status_code != HTTPClient::RESPONSE_NO_CONTENT && response.status_code != HTTPClient::RESPONSE_NOT_FOUND && response.status_code != HTTPClient::RESPONSE_METHOD_NOT_ALLOWED)) {
+			const String detail = error != OK ? (cleanup_error.is_empty() ? error_names[error] : cleanup_error) : vformat("HTTP endpoint returned status %d.", response.status_code);
 			io->write_stderr_line("MCP CLI: Session cleanup failed: " + detail);
 		}
 		session_id->clear();

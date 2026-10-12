@@ -30,9 +30,8 @@
 
 #include "mcp_runtime_observation.h"
 
-#include "mcp_runtime_screenshot_capture.h"
-
 #include "core/config/engine.h"
+#include "scene/debugger/mcp_runtime_screenshot_capture.h"
 #include "scene/gui/control.h"
 #include "scene/main/scene_tree.h"
 #include "scene/main/viewport.h"

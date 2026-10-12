@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence
 
-
 RUNTIME_SOURCE = "scene/debugger/mcp_runtime_condition_scheduler.cpp"
 GDSCRIPT_SEMANTIC_SOURCE = "editor/mcp/providers/mcp_gdscript_semantic_service.cpp"
 RELEASE_REJECTION = "The embedded MCP development tools cannot be enabled in release templates."
@@ -61,12 +60,26 @@ def run_checks(root: Path, scons: str, platform: str) -> None:
 
         profile_disabled = _run(root, scons, platform, "profile_no", (f"profile={profile}",))
         _require(profile_disabled.returncode == 0, "MCP-disabled profile dry run failed.", profile_disabled)
-        _require('target "template_debug"' in profile_disabled.output, "The profile target was not applied.", profile_disabled)
-        _require(RUNTIME_SOURCE not in profile_disabled.output, "The disabled profile scheduled an MCP runtime source.", profile_disabled)
+        _require(
+            'target "template_debug"' in profile_disabled.output,
+            "The profile target was not applied.",
+            profile_disabled,
+        )
+        _require(
+            RUNTIME_SOURCE not in profile_disabled.output,
+            "The disabled profile scheduled an MCP runtime source.",
+            profile_disabled,
+        )
 
         command_line_enabled = _run(root, scons, platform, "cli_yes", (f"profile={profile}", "mcp=yes"))
-        _require(command_line_enabled.returncode == 0, "Command-line MCP override dry run failed.", command_line_enabled)
-        _require(RUNTIME_SOURCE in command_line_enabled.output, "mcp=yes did not override the disabled profile.", command_line_enabled)
+        _require(
+            command_line_enabled.returncode == 0, "Command-line MCP override dry run failed.", command_line_enabled
+        )
+        _require(
+            RUNTIME_SOURCE in command_line_enabled.output,
+            "mcp=yes did not override the disabled profile.",
+            command_line_enabled,
+        )
 
         release = _run(root, scons, platform, "release", ("target=template_release", "mcp=yes"))
         _require(release.returncode != 0, "MCP-enabled release template was accepted.", release)

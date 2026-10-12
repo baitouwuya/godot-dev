@@ -9,8 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any
-
+from typing import Any, cast
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR_PATH = REPOSITORY_ROOT / "misc/scripts/validate_mcp_tool_manifest.py"
@@ -35,7 +34,7 @@ class MCPToolManifestTest(unittest.TestCase):
         self.manifest.write_text(json.dumps(value), encoding="utf-8")
 
     def validate(self, expected_count: int = 2) -> list[Any]:
-        return VALIDATOR.validate_mcp_tool_manifest(self.root, self.manifest, expected_count)
+        return cast(list[Any], VALIDATOR.validate_mcp_tool_manifest(self.root, self.manifest, expected_count))
 
     def test_repository_manifest_passes(self) -> None:
         self.assertEqual(VALIDATOR.validate_mcp_tool_manifest(REPOSITORY_ROOT), [])
@@ -53,12 +52,10 @@ class MCPToolManifestTest(unittest.TestCase):
         self.assertEqual(rules, ["fields", "schema-version", "tool-count"])
 
     def test_names_and_duplicates_have_stable_diagnostics(self) -> None:
-        self.write(
-            {
-                "schemaVersion": 1,
-                "tools": ["godot.test.first", "godot.test.first", "Godot invalid"],
-            }
-        )
+        self.write({
+            "schemaVersion": 1,
+            "tools": ["godot.test.first", "godot.test.first", "Godot invalid"],
+        })
 
         violations = self.validate(expected_count=3)
 

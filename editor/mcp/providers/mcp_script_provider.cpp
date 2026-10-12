@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -30,16 +30,15 @@
 
 #include "mcp_script_provider.h"
 
-#include "mcp_script_analysis_sync.h"
-#include "mcp_script_buffer.h"
-#include "mcp_script_buffer_service.h"
-#include "mcp_script_document.h"
-#include "mcp_script_tool_utils.h"
-#include "mcp_script_usages.h"
-#include "mcp_tool_utils.h"
-
 #include "core/mcp/mcp_tool_registry.h"
 #include "core/object/callable_mp.h"
+#include "editor/mcp/providers/mcp_script_analysis_sync.h"
+#include "editor/mcp/providers/mcp_script_buffer.h"
+#include "editor/mcp/providers/mcp_script_buffer_service.h"
+#include "editor/mcp/providers/mcp_script_document.h"
+#include "editor/mcp/providers/mcp_script_tool_utils.h"
+#include "editor/mcp/providers/mcp_script_usages.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
 
 #include "modules/gdscript/language_server/gdscript_analysis_session.h"
 #include "modules/gdscript/language_server/gdscript_extend_parser.h"

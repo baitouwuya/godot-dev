@@ -9,7 +9,6 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inc", ".m", ".mm"}
 REPOSITORY_INCLUDE_ROOTS = {"core", "editor", "main", "scene"}
 RE_INCLUDE = re.compile(r'^[ \t]*#[ \t]*(?:include|import)[ \t]*[<"](?P<path>[^>"]+)[>"]', re.MULTILINE)
@@ -120,7 +119,9 @@ def validate_mcp_dependencies(repository_root: Path) -> tuple[list[DependencyVio
                     "core/mcp must not depend on editor, main, or scene code",
                 )
 
-            if _is_transport_or_host_source(source, editor_mcp) and resolved_include.startswith("editor/mcp/providers/"):
+            if _is_transport_or_host_source(source, editor_mcp) and resolved_include.startswith(
+                "editor/mcp/providers/"
+            ):
                 _add_violation(
                     violations,
                     repository_root,
@@ -146,8 +147,10 @@ def validate_mcp_dependencies(repository_root: Path) -> tuple[list[DependencyVio
                         "a provider must not include another provider header",
                     )
 
-            if source.parent == main_mcp and source.name.startswith("mcp_") and resolved_include.startswith(
-                ("editor/mcp/", "scene/debugger/mcp_runtime_")
+            if (
+                source.parent == main_mcp
+                and source.name.startswith("mcp_")
+                and resolved_include.startswith(("editor/mcp/", "scene/debugger/mcp_runtime_"))
             ):
                 _add_violation(
                     violations,
@@ -160,8 +163,10 @@ def validate_mcp_dependencies(repository_root: Path) -> tuple[list[DependencyVio
                     "main/mcp_* adapters must not depend on the editor Host, Providers, or runtime bridge",
                 )
 
-            if source.parent == scene_debugger and source.name.startswith("mcp_runtime_") and resolved_include.startswith(
-                "editor/"
+            if (
+                source.parent == scene_debugger
+                and source.name.startswith("mcp_runtime_")
+                and resolved_include.startswith("editor/")
             ):
                 _add_violation(
                     violations,
@@ -196,7 +201,10 @@ def main() -> int:
     for violation in violations:
         print(violation.format(), file=sys.stderr)
     if violations:
-        print(f"MCP dependency boundaries: {len(violations)} violation(s) in {source_count} source files.", file=sys.stderr)
+        print(
+            f"MCP dependency boundaries: {len(violations)} violation(s) in {source_count} source files.",
+            file=sys.stderr,
+        )
         return 1
 
     print(f"MCP dependency boundaries: OK ({source_count} source files checked).")

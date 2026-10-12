@@ -30,10 +30,10 @@
 
 #pragma once
 
-#include "mcp_editor_ui_action_executor.h"
-#include "mcp_editor_ui_snapshot_builder.h"
-#include "mcp_editor_ui_snapshot_store.h"
-#include "mcp_editor_ui_target_validator.h"
+#include "editor/mcp/providers/mcp_editor_ui_action_executor.h"
+#include "editor/mcp/providers/mcp_editor_ui_snapshot_builder.h"
+#include "editor/mcp/providers/mcp_editor_ui_snapshot_store.h"
+#include "editor/mcp/providers/mcp_editor_ui_target_validator.h"
 
 class MCPEditorUIService {
 public:

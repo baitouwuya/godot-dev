@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
-
 BUILD_FILES = (
     "SConstruct",
     "core/SCsub",
@@ -77,28 +76,37 @@ def _contains_call(nodes: Iterable[ast.AST], name: str, first_argument: object |
                 continue
             if first_argument is None:
                 return True
-            if candidate.args and isinstance(candidate.args[0], ast.Constant) and candidate.args[0].value == first_argument:
+            if (
+                candidate.args
+                and isinstance(candidate.args[0], ast.Constant)
+                and candidate.args[0].value == first_argument
+            ):
                 return True
     return False
 
 
 def _assigned_strings(module: ast.Module, name: str) -> set[str] | None:
     for candidate in ast.walk(module):
-        if not isinstance(candidate, ast.Assign) or len(candidate.targets) != 1 or not _is_name(candidate.targets[0], name):
+        if (
+            not isinstance(candidate, ast.Assign)
+            or len(candidate.targets) != 1
+            or not _is_name(candidate.targets[0], name)
+        ):
             continue
         if not isinstance(candidate.value, (ast.List, ast.Set, ast.Tuple)):
             return None
-        return {item.value for item in candidate.value.elts if isinstance(item, ast.Constant) and isinstance(item.value, str)}
+        return {
+            item.value
+            for item in candidate.value.elts
+            if isinstance(item, ast.Constant) and isinstance(item.value, str)
+        }
     return None
 
 
 def _gdscript_lsp_provider_sources(repository_root: Path) -> set[str]:
     provider_root = (repository_root / "editor/mcp/providers").resolve()
     source_files = {
-        path.resolve()
-        for suffix in ("*.cpp", "*.h")
-        for path in provider_root.glob(suffix)
-        if path.is_file()
+        path.resolve() for suffix in ("*.cpp", "*.h") for path in provider_root.glob(suffix) if path.is_file()
     }
     includes: dict[Path, set[Path]] = {}
     directly_depends_on_lsp: set[Path] = set()
@@ -110,7 +118,11 @@ def _gdscript_lsp_provider_sources(repository_root: Path) -> set[str]:
             if include.startswith("modules/gdscript/language_server/"):
                 directly_depends_on_lsp.add(source)
                 continue
-            candidate = (repository_root / include).resolve() if include.startswith("editor/mcp/providers/") else (source.parent / include).resolve()
+            candidate = (
+                (repository_root / include).resolve()
+                if include.startswith("editor/mcp/providers/")
+                else (source.parent / include).resolve()
+            )
             if candidate in source_files:
                 includes[source].add(candidate)
 
@@ -223,7 +235,10 @@ def _has_scu_mcp_runtime_mode(module: ast.Module) -> bool:
     for candidate in ast.walk(module):
         if not isinstance(candidate, ast.Call) or _call_name(candidate) != "generate_scu_files":
             continue
-        if any(_contains(argument, lambda node: _is_attribute(node, "env", "mcp_runtime_enabled")) for argument in candidate.args):
+        if any(
+            _contains(argument, lambda node: _is_attribute(node, "env", "mcp_runtime_enabled"))
+            for argument in candidate.args
+        ):
             return True
     return False
 
@@ -232,9 +247,9 @@ def _has_release_rejection(module: ast.Module) -> bool:
     for candidate in ast.walk(module):
         if not isinstance(candidate, ast.If):
             continue
-        has_release = _contains(candidate.test, lambda node: _is_subscript(node, "env", "target")) and _contains_constant(
-            candidate.test, "template_release"
-        )
+        has_release = _contains(
+            candidate.test, lambda node: _is_subscript(node, "env", "target")
+        ) and _contains_constant(candidate.test, "template_release")
         has_mcp = _contains(candidate.test, lambda node: _is_subscript(node, "env", "mcp"))
         if has_release and has_mcp and _contains_call(candidate.body, "Exit", 255):
             return True
@@ -249,7 +264,11 @@ def _has_mcp_define(module: ast.Module) -> bool:
             continue
         for body_node in candidate.body:
             for call in ast.walk(body_node):
-                if isinstance(call, ast.Call) and _call_name(call) == "Append" and _contains_constant(call, "MCP_ENABLED"):
+                if (
+                    isinstance(call, ast.Call)
+                    and _call_name(call) == "Append"
+                    and _contains_constant(call, "MCP_ENABLED")
+                ):
                     return True
     return False
 
@@ -283,36 +302,48 @@ def _has_test_gate(module: ast.Module) -> bool:
     has_scu_aggregation = False
     has_enabled_predicate = False
     for candidate in ast.walk(module):
-        if isinstance(candidate, ast.Assign) and len(candidate.targets) == 1 and _is_name(
-            candidate.targets[0], "MCP_EDITOR_TEST_PREFIXES"
+        if (
+            isinstance(candidate, ast.Assign)
+            and len(candidate.targets) == 1
+            and _is_name(candidate.targets[0], "MCP_EDITOR_TEST_PREFIXES")
         ):
             if isinstance(candidate.value, (ast.List, ast.Tuple)):
                 editor_prefixes = tuple(item.value for item in candidate.value.elts if isinstance(item, ast.Constant))
-        if isinstance(candidate, ast.Assign) and len(candidate.targets) == 1 and _is_name(
-            candidate.targets[0], "MCP_RUNTIME_TEST_SOURCES"
+        if (
+            isinstance(candidate, ast.Assign)
+            and len(candidate.targets) == 1
+            and _is_name(candidate.targets[0], "MCP_RUNTIME_TEST_SOURCES")
         ):
             if isinstance(candidate.value, (ast.List, ast.Tuple)):
                 runtime_sources = tuple(item.value for item in candidate.value.elts if isinstance(item, ast.Constant))
-        if isinstance(candidate, ast.Assign) and len(candidate.targets) == 1 and _is_name(
-            candidate.targets[0], "editor_mcp_enabled"
+        if (
+            isinstance(candidate, ast.Assign)
+            and len(candidate.targets) == 1
+            and _is_name(candidate.targets[0], "editor_mcp_enabled")
         ):
             has_editor_enabled_assignment = _contains(
                 candidate.value, lambda node: _is_attribute(node, "env", "mcp_editor_enabled")
             )
-        if isinstance(candidate, ast.Assign) and len(candidate.targets) == 1 and _is_name(
-            candidate.targets[0], "runtime_mcp_enabled"
+        if (
+            isinstance(candidate, ast.Assign)
+            and len(candidate.targets) == 1
+            and _is_name(candidate.targets[0], "runtime_mcp_enabled")
         ):
             has_runtime_enabled_assignment = _contains(
                 candidate.value, lambda node: _is_attribute(node, "env", "mcp_runtime_enabled")
             )
-        if isinstance(candidate, ast.Assign) and len(candidate.targets) == 1 and _is_name(
-            candidate.targets[0], "force_link_sources"
+        if (
+            isinstance(candidate, ast.Assign)
+            and len(candidate.targets) == 1
+            and _is_name(candidate.targets[0], "force_link_sources")
         ):
             has_enabled_filter |= isinstance(candidate.value, ast.ListComp) and _contains_call(
                 (candidate.value,), "is_enabled_test_source"
             )
-        if isinstance(candidate, ast.Assign) and len(candidate.targets) == 1 and _is_name(
-            candidate.targets[0], "mcp_test_sources"
+        if (
+            isinstance(candidate, ast.Assign)
+            and len(candidate.targets) == 1
+            and _is_name(candidate.targets[0], "mcp_test_sources")
         ):
             has_mcp_selection = isinstance(candidate.value, ast.ListComp) and _contains_call(
                 (candidate.value,), "is_mcp_test_source"
@@ -324,10 +355,18 @@ def _has_test_gate(module: ast.Module) -> bool:
                 and _contains_call((candidate,), "is_editor_mcp_test_source")
                 and _contains_call((candidate,), "is_runtime_mcp_test_source")
             )
-        if isinstance(candidate, ast.If) and _contains(candidate.test, lambda node: _is_subscript(node, "env", "scu_build")):
-            for call in (node for node in ast.walk(ast.Module(body=candidate.body, type_ignores=[])) if isinstance(node, ast.Call)):
-                if _call_name(call) == "add_source_files" and len(call.args) >= 2 and _contains(
-                    call.args[1], lambda node: _is_name(node, "mcp_test_sources")
+        if isinstance(candidate, ast.If) and _contains(
+            candidate.test, lambda node: _is_subscript(node, "env", "scu_build")
+        ):
+            for call in (
+                node
+                for node in ast.walk(ast.Module(body=candidate.body, type_ignores=[]))
+                if isinstance(node, ast.Call)
+            ):
+                if (
+                    _call_name(call) == "add_source_files"
+                    and len(call.args) >= 2
+                    and _contains(call.args[1], lambda node: _is_name(node, "mcp_test_sources"))
                 ):
                     has_scu_aggregation = True
     return (
@@ -377,8 +416,10 @@ def _has_scu_test_coverage(module: ast.Module) -> bool:
         if not isinstance(candidate, ast.FunctionDef) or candidate.name != "generate_scu_files":
             continue
         for call in (node for node in ast.walk(candidate) if isinstance(node, ast.Call)):
-            if _call_name(call) == "process_folder" and _contains_constant(call, "tests") and _contains_constant(
-                call, "/core/debugger"
+            if (
+                _call_name(call) == "process_folder"
+                and _contains_constant(call, "tests")
+                and _contains_constant(call, "/core/debugger")
             ):
                 return True
     return False
@@ -405,7 +446,11 @@ def validate_mcp_build_surfaces(repository_root: Path) -> list[BuildSurfaceViola
     sconstruct = modules.get("SConstruct")
     if sconstruct:
         requirements = (
-            ("mcp-option", _has_mcp_option(sconstruct), "mcp must remain an auto|no|yes option with auto as its default"),
+            (
+                "mcp-option",
+                _has_mcp_option(sconstruct),
+                "mcp must remain an auto|no|yes option with auto as its default",
+            ),
             (
                 "mcp-option-precedence",
                 _has_profile_aware_option_loading(sconstruct),
@@ -445,7 +490,9 @@ def validate_mcp_build_surfaces(repository_root: Path) -> list[BuildSurfaceViola
         (lambda node: _is_attribute(node, "env", "mcp_editor_enabled"),),
     ):
         violations.append(
-            BuildSurfaceViolation("core/SCsub", "core-editor-only", "core/mcp must compile only in MCP-enabled editor builds")
+            BuildSurfaceViolation(
+                "core/SCsub", "core-editor-only", "core/mcp must compile only in MCP-enabled editor builds"
+            )
         )
 
     editor = modules.get("editor/SCsub")
@@ -456,7 +503,9 @@ def validate_mcp_build_surfaces(repository_root: Path) -> list[BuildSurfaceViola
         (lambda node: _is_attribute(node, "env", "mcp_editor_enabled"),),
     ):
         violations.append(
-            BuildSurfaceViolation("editor/SCsub", "editor-host-gate", "editor/mcp must compile only in MCP-enabled editor builds")
+            BuildSurfaceViolation(
+                "editor/SCsub", "editor-host-gate", "editor/mcp must compile only in MCP-enabled editor builds"
+            )
         )
 
     providers = modules.get("editor/mcp/providers/SCsub")
@@ -477,7 +526,9 @@ def validate_mcp_build_surfaces(repository_root: Path) -> list[BuildSurfaceViola
             if declared_lsp_sources is None or missing_lsp_sources:
                 reason = "gdscript_lsp_sources must be a string collection"
                 if missing_lsp_sources:
-                    reason = "GDScript LSP-dependent sources are not conditionally gated: " + ", ".join(missing_lsp_sources)
+                    reason = "GDScript LSP-dependent sources are not conditionally gated: " + ", ".join(
+                        missing_lsp_sources
+                    )
                 violations.append(
                     BuildSurfaceViolation(
                         "editor/mcp/providers/SCsub",
@@ -493,7 +544,9 @@ def validate_mcp_build_surfaces(repository_root: Path) -> list[BuildSurfaceViola
         "mcp_",
     ):
         violations.append(
-            BuildSurfaceViolation("main/SCsub", "cli-source-gate", "main/mcp_* must compile only in MCP-enabled editor builds")
+            BuildSurfaceViolation(
+                "main/SCsub", "cli-source-gate", "main/mcp_* must compile only in MCP-enabled editor builds"
+            )
         )
 
     debugger = modules.get("scene/debugger/SCsub")

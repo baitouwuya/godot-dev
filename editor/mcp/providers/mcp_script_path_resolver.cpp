@@ -3,6 +3,7 @@
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
 /**************************************************************************/
 /* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
 /* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
@@ -29,9 +30,8 @@
 
 #include "mcp_script_path_resolver.h"
 
-#include "mcp_path_utils.h"
-
 #include "core/config/project_settings.h"
+#include "editor/mcp/providers/mcp_path_utils.h"
 
 namespace {
 

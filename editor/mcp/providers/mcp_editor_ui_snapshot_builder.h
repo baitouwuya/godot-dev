@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  mcp_editor_ui_snapshot_builder.h                                     */
+/*  mcp_editor_ui_snapshot_builder.h                                      */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -30,9 +30,8 @@
 
 #pragma once
 
-#include "mcp_editor_ui_types.h"
-
 #include "core/variant/array.h"
+#include "editor/mcp/providers/mcp_editor_ui_types.h"
 
 class Node;
 class Window;

@@ -30,7 +30,7 @@
 
 #include "mcp_runtime_observation_debugger_plugin.h"
 
-#include "mcp_runtime_debugger_gateway.h"
+#include "editor/mcp/providers/mcp_runtime_debugger_gateway.h"
 
 void MCPRuntimeObservationDebuggerPlugin::_bind_methods() {
 }

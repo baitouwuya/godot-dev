@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -30,17 +30,16 @@
 
 #include "mcp_resource_import_service.h"
 
-#include "mcp_path_utils.h"
-#include "mcp_resource_import_options.h"
-#include "mcp_resource_import_transaction.h"
-#include "mcp_tool_utils.h"
-
 #include "core/io/config_file.h"
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
 #include "core/io/resource_importer.h"
 #include "core/templates/hash_set.h"
 #include "editor/file_system/editor_file_system.h"
+#include "editor/mcp/providers/mcp_path_utils.h"
+#include "editor/mcp/providers/mcp_resource_import_options.h"
+#include "editor/mcp/providers/mcp_resource_import_transaction.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
 
 namespace {
 

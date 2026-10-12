@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -30,10 +30,9 @@
 
 #include "mcp_node_structure_operations.h"
 
-#include "mcp_scene_utils.h"
-#include "mcp_undo_redo_action.h"
-
 #include "core/io/resource_loader.h"
+#include "editor/mcp/providers/mcp_scene_utils.h"
+#include "editor/mcp/providers/mcp_undo_redo_action.h"
 #include "scene/2d/node_2d.h"
 #include "scene/3d/node_3d.h"
 #include "scene/gui/container.h"

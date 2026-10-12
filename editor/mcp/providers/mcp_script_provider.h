@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -30,12 +30,11 @@
 
 #pragma once
 
-#include "../mcp_editor_feature.h"
-#include "mcp_gdscript_session_manager.h"
-#include "mcp_script_buffer_service.h"
-
 #include "core/object/object.h"
 #include "core/variant/dictionary.h"
+#include "editor/mcp/mcp_editor_feature.h"
+#include "editor/mcp/providers/mcp_gdscript_session_manager.h"
+#include "editor/mcp/providers/mcp_script_buffer_service.h"
 
 class MCPToolRegistry;
 class GDScriptAnalysisSession;

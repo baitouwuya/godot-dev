@@ -400,9 +400,7 @@ def generate_scu_files(max_includes_per_scu, mcp_runtime_enabled=True):
     process_folder(["scene/3d/physics/joints"])
     process_folder(["scene/3d/xr"])
     process_folder(["scene/animation"])
-    process_folder(
-        ["scene/debugger"], excluded_file_prefixes=() if mcp_runtime_enabled else ("mcp_runtime_",)
-    )
+    process_folder(["scene/debugger"], excluded_file_prefixes=() if mcp_runtime_enabled else ("mcp_runtime_",))
     process_folder(["scene/gui"])
     process_folder(["scene/main"])
     process_folder(["scene/resources"])

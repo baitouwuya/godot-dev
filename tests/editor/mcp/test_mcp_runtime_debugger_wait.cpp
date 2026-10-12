@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -28,8 +28,8 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
-#include "editor/mcp/providers/mcp_runtime_debugger_wait.h"
 #include "editor/mcp/providers/mcp_runtime_debugger_gateway.h"
+#include "editor/mcp/providers/mcp_runtime_debugger_wait.h"
 #include "editor/mcp/providers/mcp_runtime_request_broker.h"
 #include "tests/test_macros.h"
 
@@ -80,8 +80,7 @@ TEST_CASE("[MCP][Provider] Runtime debugger wait reports terminal states without
 
 	debugger.completed = false;
 	debugger.stale = true;
-	CHECK(MCPRuntimeDebuggerWait::wait_until(&debugger, 0, [&]() { return debugger.completed; },
-			  [&]() { return debugger.stale; }) == MCPRuntimeDebuggerWait::WAIT_STALE);
+	CHECK(MCPRuntimeDebuggerWait::wait_until(&debugger, 0, [&]() { return debugger.completed; }, [&]() { return debugger.stale; }) == MCPRuntimeDebuggerWait::WAIT_STALE);
 	CHECK(debugger.poll_count == 0);
 
 	debugger.stale = false;
@@ -105,8 +104,7 @@ TEST_CASE("[MCP][Provider] Runtime debugger wait observes state changes produced
 
 	debugger = FakeDebugger();
 	debugger.stale_after_poll = true;
-	CHECK(MCPRuntimeDebuggerWait::wait_until(&debugger, MCPRuntimeDebuggerWait::deadline_from_timeout_msec(100),
-			  [&]() { return debugger.completed; }, [&]() { return debugger.stale; }) == MCPRuntimeDebuggerWait::WAIT_STALE);
+	CHECK(MCPRuntimeDebuggerWait::wait_until(&debugger, MCPRuntimeDebuggerWait::deadline_from_timeout_msec(100), [&]() { return debugger.completed; }, [&]() { return debugger.stale; }) == MCPRuntimeDebuggerWait::WAIT_STALE);
 	CHECK(debugger.poll_count == 1);
 
 	debugger = FakeDebugger();

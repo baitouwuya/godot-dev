@@ -30,13 +30,12 @@
 
 #include "mcp_debug_capture.h"
 
-#include "mcp_debug_event_store.h"
-
 #include "core/debugger/debugger_marshalls.h"
 #include "core/debugger/remote_debugger.h"
 #include "core/object/callable_mp.h"
 #include "editor/debugger/editor_debugger_node.h"
 #include "editor/debugger/script_editor_debugger.h"
+#include "editor/mcp/providers/mcp_debug_event_store.h"
 
 namespace {
 

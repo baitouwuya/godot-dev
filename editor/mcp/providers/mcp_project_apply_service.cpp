@@ -3,13 +3,14 @@
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
 /**************************************************************************/
 /* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
 /* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -29,14 +30,13 @@
 
 #include "mcp_project_apply_service.h"
 
-#include "mcp_project_revision.h"
-#include "mcp_project_settings_mutation.h"
-#include "mcp_tool_utils.h"
-#include "mcp_variant_codec.h"
-
 #include "core/config/project_settings.h"
 #include "core/io/file_access.h"
 #include "core/templates/vector.h"
+#include "editor/mcp/providers/mcp_project_revision.h"
+#include "editor/mcp/providers/mcp_project_settings_mutation.h"
+#include "editor/mcp/providers/mcp_tool_utils.h"
+#include "editor/mcp/providers/mcp_variant_codec.h"
 
 namespace {
 
@@ -160,7 +160,7 @@ static Dictionary _save_failure(ProjectSettings *p_settings, const Vector<Settin
 Dictionary MCPProjectApplyService::apply(const Dictionary &p_arguments) const {
 	String unknown_argument;
 	if (!MCPToolUtils::has_only_arguments(p_arguments,
-			PackedStringArray{ "settings", "save", "expectedProjectRevision" }, unknown_argument)) {
+				PackedStringArray{ "settings", "save", "expectedProjectRevision" }, unknown_argument)) {
 		return MCPToolUtils::make_error_result("INVALID_ARGUMENTS", "Unknown godot.project.apply argument: " + unknown_argument);
 	}
 
@@ -230,8 +230,7 @@ Dictionary MCPProjectApplyService::apply(const Dictionary &p_arguments) const {
 			}
 			String decode_error;
 			if (MCPVariantCodec::decode(entry["value"], operation.value, &decode_error) != OK || operation.value.get_type() == Variant::NIL) {
-				return MCPToolUtils::make_error_result("INVALID_VALUE", vformat("settings[%d]: %s", i,
-						decode_error.is_empty() ? "set values must not be null." : decode_error));
+				return MCPToolUtils::make_error_result("INVALID_VALUE", vformat("settings[%d]: %s", i, decode_error.is_empty() ? "set values must not be null." : decode_error));
 			}
 		} else if (entry.has("value")) {
 			return MCPToolUtils::make_error_result("INVALID_ARGUMENTS", vformat("settings[%d].value is only valid for set operations.", i));

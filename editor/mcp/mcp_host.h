@@ -3,6 +3,7 @@
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
 /**************************************************************************/
 /* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
 /* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
@@ -29,11 +30,10 @@
 
 #pragma once
 
-#include "mcp_http_server.h"
-
 #include "core/mcp/mcp_project_identity.h"
 #include "core/mcp/mcp_protocol.h"
 #include "core/templates/hash_map.h"
+#include "editor/mcp/mcp_http_server.h"
 
 class MCPHostSessionObserver {
 public:

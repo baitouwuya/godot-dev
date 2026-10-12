@@ -9,7 +9,6 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-
 DEFAULT_MANIFEST = Path("tests/editor/mcp/data/mcp_tool_manifest.json")
 DEFAULT_EXPECTED_TOOL_COUNT = 111
 TOOL_NAME = re.compile(r"godot(?:\.[a-z][a-z0-9_]*){2,}")
@@ -81,9 +80,7 @@ def validate_mcp_tool_manifest(
             )
             continue
         if name in seen:
-            violations.append(
-                ToolManifestViolation(display_path, "duplicate-tool", f"tool name is repeated: {name}")
-            )
+            violations.append(ToolManifestViolation(display_path, "duplicate-tool", f"tool name is repeated: {name}"))
         seen.add(name)
 
     return sorted(violations)

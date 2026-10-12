@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  mcp_harness_step_executor.cpp                                        */
+/*  mcp_harness_step_executor.cpp                                         */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -10,7 +10,7 @@
 /*                                                                        */
 /* Permission is hereby granted, free of charge, to any person obtaining  */
 /* a copy of this software and associated documentation files (the        */
-/* "Software"), to deal in the Software without restriction, including   */
+/* "Software"), to deal in the Software without restriction, including    */
 /* without limitation the rights to use, copy, modify, merge, publish,    */
 /* distribute, sublicense, and/or sell copies of the Software, and to     */
 /* permit persons to whom the Software is furnished to do so, subject to  */
@@ -30,8 +30,8 @@
 
 #include "mcp_harness_step_executor.h"
 
-#include "mcp_harness_evidence_collector.h"
-#include "mcp_harness_report_builder.h"
+#include "editor/mcp/providers/mcp_harness_evidence_collector.h"
+#include "editor/mcp/providers/mcp_harness_report_builder.h"
 
 Dictionary MCPHarnessStepExecutor::_prepare_arguments(const MCPHarnessJob &p_job, const Dictionary &p_step) const {
 	Dictionary arguments = Dictionary(p_step.get("arguments", Dictionary())).duplicate(true);
