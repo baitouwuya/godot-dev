@@ -39,6 +39,7 @@
 #include "core/os/os.h"
 #include "editor/file_system/editor_file_system.h"
 #include "editor/import/resource_importer_csv_translation.h"
+#include "editor/inspector/editor_resource_preview.h"
 #include "editor/mcp/providers/mcp_resource_provider.h"
 #include "editor/mcp/providers/mcp_variant_codec.h"
 #include "scene/resources/gradient.h"
@@ -523,6 +524,14 @@ TEST_CASE("[MCP][Provider] Resource properties use the cache until explicit save
 
 	provider->unregister_tools();
 	memdelete(provider);
+}
+
+TEST_CASE("[MCP][Provider] Editor resource preview clears its singleton after destruction") {
+	REQUIRE(EditorResourcePreview::get_singleton() == nullptr);
+	EditorResourcePreview *preview = memnew(EditorResourcePreview);
+	CHECK(EditorResourcePreview::get_singleton() == preview);
+	memdelete(preview);
+	CHECK(EditorResourcePreview::get_singleton() == nullptr);
 }
 
 TEST_CASE("[MCP][Provider] EditorFileSystem imports CSV resources with default and custom options") {
