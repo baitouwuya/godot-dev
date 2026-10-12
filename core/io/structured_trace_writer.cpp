@@ -152,23 +152,34 @@ void StructuredTraceWriter::_reset_no_lock() {
 	active = false;
 }
 
-void StructuredTraceWriter::_close_no_lock() {
+Error StructuredTraceWriter::_close_no_lock(String *r_error) {
 	if (!active) {
-		return;
+		return OK;
 	}
+	Error error = OK;
 	if (current_event_file.is_valid()) {
 		current_event_file->flush();
+		error = current_event_file->get_error();
 		current_event_file->close();
 		current_event_file.unref();
 	}
 	ended_at_utc = _utc_now();
-	_write_manifest();
+	const Error manifest_error = _write_manifest(r_error);
 	active = false;
+	if (error != OK) {
+		_set_error(r_error, "Unable to flush a structured trace event file.");
+		return error;
+	}
+	return manifest_error;
 }
 
 Error StructuredTraceWriter::_validate_options(const Options &p_options, String *r_error) const {
 	if (p_options.max_event_file_bytes == 0 || p_options.max_event_file_bytes > 1024ULL * 1024 * 1024) {
 		_set_error(r_error, "max_event_file_bytes must be from 1 byte to 1 GiB.");
+		return ERR_INVALID_PARAMETER;
+	}
+	if (p_options.max_event_files < 0 || p_options.max_event_files > 128) {
+		_set_error(r_error, "max_event_files must be from 0 to 128.");
 		return ERR_INVALID_PARAMETER;
 	}
 	if (p_options.inline_payload_max_bytes > MAX_EVENT_RECORD_BYTES) {
@@ -243,6 +254,8 @@ Error StructuredTraceWriter::_write_manifest(String *r_error) {
 		manifest_event_files.push_back(file);
 	}
 	manifest["eventFiles"] = manifest_event_files;
+	manifest["maxEventFiles"] = options.max_event_files;
+	manifest["maxEventFileBytes"] = int64_t(options.max_event_file_bytes);
 	manifest["payloadDirectory"] = "payloads";
 
 	Error error = OK;
@@ -253,8 +266,12 @@ Error StructuredTraceWriter::_write_manifest(String *r_error) {
 	}
 	file->store_string(JSON::stringify(manifest, "\t") + "\n");
 	file->flush();
+	error = file->get_error();
 	file->close();
-	return OK;
+	if (error != OK) {
+		_set_error(r_error, "Unable to write the structured trace manifest.");
+	}
+	return error;
 }
 
 Error StructuredTraceWriter::_open_next_event_file(String *r_error) {
@@ -262,6 +279,15 @@ Error StructuredTraceWriter::_open_next_event_file(String *r_error) {
 		current_event_file->flush();
 		current_event_file->close();
 		current_event_file.unref();
+	}
+	// Remove an old file before opening another, so even long-lived Hosts have
+	// a fixed storage bound. Retained sequence numbers remain monotonic.
+	if (options.max_event_files > 0 && event_files.size() >= options.max_event_files) {
+		if (DirAccess::remove_absolute(session_directory.path_join(event_files[0])) != OK) {
+			_set_error(r_error, "Unable to remove a rotated structured trace event file.");
+			return ERR_CANT_CREATE;
+		}
+		event_files.remove_at(0);
 	}
 	current_event_file_index++;
 	const String name = vformat("events-%04d.jsonl", current_event_file_index);
@@ -360,23 +386,34 @@ Error StructuredTraceWriter::record(const String &p_category, const String &p_ev
 	entry["error"] = p_error.is_empty() ? Variant() : Variant(p_error);
 	const String line = JSON::stringify(entry);
 	const uint64_t line_bytes = uint64_t(_utf8_size(line)) + 1;
-	if (line_bytes > MAX_EVENT_RECORD_BYTES) {
+	if (line_bytes > MAX_EVENT_RECORD_BYTES || (options.max_event_files > 0 && line_bytes > options.max_event_file_bytes)) {
 		_set_error(r_error, "Structured trace event exceeds the size limit.");
 		return ERR_OUT_OF_MEMORY;
 	}
 	if (current_event_file_bytes > 0 && current_event_file_bytes + line_bytes > options.max_event_file_bytes) {
 		Error error = _open_next_event_file(r_error);
 		if (error != OK) {
+			_close_no_lock();
 			return error;
 		}
 	}
 	current_event_file->store_line(line);
 	current_event_file->flush();
+	const Error write_error = current_event_file->get_error();
+	if (write_error != OK) {
+		_set_error(r_error, "Unable to write a structured trace event.");
+		_close_no_lock();
+		return write_error;
+	}
 	current_event_file_bytes += line_bytes;
 	next_event_sequence++;
 	if (!categories_seen.has(p_category)) {
 		categories_seen.insert(p_category);
-		_write_manifest();
+		const Error manifest_error = _write_manifest(r_error);
+		if (manifest_error != OK) {
+			_close_no_lock();
+		}
+		return manifest_error;
 	}
 	return OK;
 }
@@ -443,9 +480,10 @@ Error StructuredTraceWriter::reference_existing_file(const String &p_mime, const
 	return OK;
 }
 
-void StructuredTraceWriter::close() {
+Error StructuredTraceWriter::close(String *r_error) {
+	_set_error(r_error, String());
 	MutexLock lock(mutex);
-	_close_no_lock();
+	return _close_no_lock(r_error);
 }
 
 bool StructuredTraceWriter::is_open() const {

@@ -181,6 +181,7 @@ void MCPBuiltinFeatures::shutdown() {
 void MCPBuiltinFeatures::configure_host(const Dictionary &p_project_metadata) {
 	ERR_FAIL_NULL(harness_provider);
 	harness_provider->set_trace_service(trace_service, p_project_metadata);
+	trace_service->configure_ordinary(p_project_metadata);
 }
 
 void MCPBuiltinFeatures::clear_debug_events() {

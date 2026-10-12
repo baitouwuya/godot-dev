@@ -89,6 +89,7 @@ private:
 
 	Dictionary _make_response(const Variant &p_id, const Variant &p_result) const;
 	Dictionary _make_error(const Variant &p_id, int p_code, const String &p_message) const;
+	Variant _dispatch_request_impl(const Dictionary &p_request, bool &r_respond, const Dictionary &p_session_context);
 	Variant _dispatch_request(const Dictionary &p_request, bool &r_respond, const Dictionary &p_session_context);
 	Variant _dispatch_batch(const Array &p_requests, const Dictionary &p_session_context);
 	Variant _handle_initialize(const Dictionary &p_params, const Variant &p_id);

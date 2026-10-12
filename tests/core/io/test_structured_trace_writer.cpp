@@ -173,6 +173,95 @@ TEST_CASE("[StructuredTraceWriter] Retention only removes managed sessions and r
 	CHECK(FileAccess::exists(unrelated.path_join("keep.txt")));
 }
 
+TEST_CASE("[StructuredTraceWriter] Opt-in active retention bounds files and preserves sequence order") {
+	Error error = OK;
+	Ref<DirAccess> temporary_directory = DirAccess::create_temp("structured_trace_window", false, &error);
+	REQUIRE(error == OK);
+	StructuredTraceWriter::Options options;
+	options.root_directory_override = temporary_directory->get_current_dir();
+	options.max_event_file_bytes = 1024;
+	options.max_event_files = 2;
+	StructuredTraceWriter writer;
+	REQUIRE(writer.open(Dictionary(), Dictionary(), options) == OK);
+	Dictionary data{ { "padding", String("x").repeat(400) } };
+	for (int i = 0; i < 20; i++) {
+		REQUIRE(writer.record("mcp", "finished", "info", "1", data) == OK);
+	}
+	const String directory = writer.get_session_directory();
+	writer.close();
+	const Dictionary manifest = JSON::parse_string(FileAccess::get_file_as_string(directory.path_join("manifest.json")));
+	const Array files = manifest["eventFiles"];
+	REQUIRE(files.size() == 2);
+	uint64_t total_bytes = 0;
+	int64_t sequence = 0;
+	int event_file_count = 0;
+	for (const String &file : DirAccess::get_files_at(directory)) {
+		if (file.ends_with(".jsonl")) {
+			event_file_count++;
+			CHECK(files.has(file));
+		}
+	}
+	CHECK(event_file_count == 2);
+	for (const Variant &file : files) {
+		total_bytes += FileAccess::get_size(directory.path_join(file));
+		for (const String &line : FileAccess::get_file_as_string(directory.path_join(file)).split("\n", false)) {
+			const Dictionary event = JSON::parse_string(line);
+			CHECK(int64_t(event["seq"]) > sequence);
+			sequence = event["seq"];
+		}
+	}
+	CHECK(sequence == 20);
+	CHECK(total_bytes <= 2048);
+	REQUIRE(writer.open(Dictionary(), Dictionary(), options) == OK);
+	CHECK(writer.record("mcp", "too_large", "info", "1", Dictionary{ { "padding", String("x").repeat(2048) } }) == ERR_OUT_OF_MEMORY);
+	writer.close();
+	options.max_event_files = -1;
+	CHECK(writer.open(Dictionary(), Dictionary(), options) == ERR_INVALID_PARAMETER);
+}
+
+TEST_CASE("[StructuredTraceWriter] Rotation failure closes the writer before another record") {
+	Error error = OK;
+	Ref<DirAccess> temporary_directory = DirAccess::create_temp("structured_trace_rotate_failure", false, &error);
+	REQUIRE(error == OK);
+	StructuredTraceWriter::Options options;
+	options.root_directory_override = temporary_directory->get_current_dir();
+	options.max_event_file_bytes = 1024;
+	options.max_event_files = 2;
+	StructuredTraceWriter writer;
+	REQUIRE(writer.open(Dictionary(), Dictionary(), options) == OK);
+	Dictionary data{ { "padding", String("x").repeat(400) } };
+	REQUIRE(writer.record("mcp", "started", "info", "1", data) == OK);
+	REQUIRE(writer.record("mcp", "finished", "info", "1", data) == OK);
+	const String oldest = writer.get_session_directory().path_join("events-0001.jsonl");
+	REQUIRE(DirAccess::remove_absolute(oldest) == OK);
+	REQUIRE(DirAccess::make_dir_absolute(oldest) == OK);
+	_write_file(oldest.path_join("obstruction"), "keep");
+	String diagnostic;
+	CHECK(writer.record("mcp", "started", "info", "2", data, Dictionary(), Dictionary(), &diagnostic) != OK);
+	CHECK_FALSE(diagnostic.is_empty());
+	CHECK_FALSE(writer.is_open());
+	CHECK(writer.record("mcp", "retry", "info", "2", Dictionary()) == ERR_UNCONFIGURED);
+}
+
+TEST_CASE("[StructuredTraceWriter] Manifest write failures are reported to callers") {
+	Error error = OK;
+	Ref<DirAccess> temporary_directory = DirAccess::create_temp("structured_trace_failure", false, &error);
+	REQUIRE(error == OK);
+	StructuredTraceWriter::Options options;
+	options.root_directory_override = temporary_directory->get_current_dir();
+	StructuredTraceWriter writer;
+	REQUIRE(writer.open(Dictionary(), Dictionary(), options) == OK);
+	const String manifest = writer.get_session_directory().path_join("manifest.json");
+	REQUIRE(DirAccess::remove_absolute(manifest) == OK);
+	REQUIRE(DirAccess::make_dir_absolute(manifest) == OK);
+	String diagnostic;
+	CHECK(writer.record("mcp", "started", "info", "1", Dictionary(), Dictionary(), Dictionary(), &diagnostic) != OK);
+	CHECK_FALSE(diagnostic.is_empty());
+	CHECK(writer.record("mcp", "retry", "info", "1", Dictionary()) == ERR_UNCONFIGURED);
+	REQUIRE(DirAccess::remove_absolute(manifest) == OK);
+	writer.close();
+}
+
 TEST_CASE("[StructuredTraceWriter] Lifecycle and bounds reject invalid input") {
 	StructuredTraceWriter writer;
 	CHECK(writer.record("runtime", "event", "info", String(), Dictionary()) == ERR_UNCONFIGURED);

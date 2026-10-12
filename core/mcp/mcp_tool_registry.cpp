@@ -254,6 +254,15 @@ PackedStringArray MCPToolRegistry::get_tool_names() const {
 }
 
 MCPToolRegistry::CallResult MCPToolRegistry::call_tool(const StringName &p_name, const Dictionary &p_arguments, const MCPToolCallContext &p_context) const {
+	// Unknown tool names are untrusted input, not diagnostic metadata.
+	MCPTraceScope trace(trace_observer, MCPTraceSpan::TOOL, tools.has(p_name) ? String(p_name) : String("unknown"), p_context.session.get("sessionId", String()));
+	const CallResult result = _call_tool(p_name, p_arguments, p_context);
+	const bool is_error = result.status != CALL_OK || bool(result.result.get("isError", false));
+	trace.finish(result.status != CALL_OK ? MCPTraceSpan::PROTOCOL_ERROR : (is_error ? MCPTraceSpan::BUSINESS_ERROR : MCPTraceSpan::SUCCESS), result.status, is_error);
+	return result;
+}
+
+MCPToolRegistry::CallResult MCPToolRegistry::_call_tool(const StringName &p_name, const Dictionary &p_arguments, const MCPToolCallContext &p_context) const {
 	CallResult call_result;
 	const ToolEntry *entry = tools.getptr(p_name);
 	if (!entry) {

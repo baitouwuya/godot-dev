@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "core/mcp/mcp_trace_observer.h"
 #include "core/object/object.h"
 #include "core/templates/hash_map.h"
 #include "core/templates/vector.h"
@@ -62,6 +63,9 @@ public:
 		String message;
 	};
 
+	void set_trace_observer(MCPTraceObserver *p_observer) { trace_observer = p_observer; }
+	MCPTraceObserver *get_trace_observer() const { return trace_observer; }
+
 	Error register_tool(const Dictionary &p_definition, const Callable &p_handler, Object *p_owner = nullptr, String *r_error = nullptr);
 	bool unregister_tool(const StringName &p_name);
 	int unregister_tools_for_owner(Object *p_owner);
@@ -79,6 +83,8 @@ private:
 		ObjectID owner_id;
 	};
 
+	MCPTraceObserver *trace_observer = nullptr;
+	CallResult _call_tool(const StringName &p_name, const Dictionary &p_arguments, const MCPToolCallContext &p_context) const;
 	HashMap<StringName, ToolEntry> tools;
 	Vector<StringName> registration_order;
 	mutable Array definition_cache;

@@ -32,9 +32,12 @@
 
 #include "core/crypto/crypto_core.h"
 #include "core/io/json.h"
+#include "core/mcp/mcp_tool_registry.h"
 #include "core/os/os.h"
+#include "core/string/print_string.h"
 
 MCPTraceService::~MCPTraceService() {
+	unregister_tools();
 	stop();
 }
 
@@ -172,17 +175,31 @@ Error MCPTraceService::start(const Dictionary &p_project_metadata, const String 
 	_set_error(r_error, String());
 	MutexLock lock(mutex);
 	if (started) {
-		writer.close();
-		started = false;
+		return OK;
 	}
+	last_error = String();
 	StructuredTraceWriter::Options options;
 	options.root_directory_override = p_root_directory_override;
+	const bool harness_only = p_process_mode == "editor-mcp-harness";
+	options.max_event_files = harness_only ? 0 : 4;
 	Dictionary process;
 	process["pid"] = int64_t(OS::get_singleton()->get_process_id());
-	process["mode"] = _bounded_text(p_process_mode, 128);
-	process["binaryPath"] = OS::get_singleton()->get_executable_path().get_file();
-	process["cwd"] = OS::get_singleton()->get_cwd().get_file();
-	const Error error = writer.open(_bounded_dictionary(p_project_metadata), process, options, r_error);
+	process["mode"] = p_process_mode == "editor-mcp-harness" ? "editor-mcp-harness" : "editor-mcp";
+	// Metadata supplied by projects must not become a content-logging back door.
+	Dictionary project;
+	for (const char *key : { "projectId", "instanceId" }) {
+		const Variant value = p_project_metadata.get(key, Variant());
+		if (value.get_type() == Variant::STRING) {
+			project[String(key) + "Hash"] = String(value).sha256_text().left(16);
+		}
+	}
+	if (harness_only) {
+		// Explicit Harness evidence keeps its existing metadata/retention policy.
+		project = _bounded_dictionary(p_project_metadata);
+		process["binaryPath"] = OS::get_singleton()->get_executable_path().get_file();
+		process["cwd"] = OS::get_singleton()->get_cwd().get_file();
+	}
+	const Error error = writer.open(project, process, options, r_error);
 	started = error == OK;
 	return error;
 }
@@ -196,30 +213,80 @@ Error MCPTraceService::_record(const String &p_category, const String &p_event, 
 	return writer.record(p_category, _bounded_text(p_event, 256), p_severity, _bounded_text(p_correlation_id, 256), _bounded_dictionary(p_data), Dictionary(), _bounded_dictionary(p_error), r_error);
 }
 
-Error MCPTraceService::record_mcp_request(const String &p_method, const String &p_session_id, const String &p_correlation_id, const Dictionary &p_arguments, const Dictionary &p_result, const Dictionary &p_error, String *r_error) {
-	if (!is_started()) {
-		_set_error(r_error, String());
-		return OK;
+Error MCPTraceService::register_tools(MCPToolRegistry *p_registry, String *r_error) {
+	_set_error(r_error, String());
+	if (!p_registry || tool_registry) {
+		_set_error(r_error, "Trace service requires an unbound Tool Registry.");
+		return ERR_INVALID_PARAMETER;
 	}
-	Dictionary data;
-	data["method"] = _bounded_text(p_method, 256);
-	data["sessionHash"] = _session_hash(p_session_id);
-	data["arguments"] = _bounded_dictionary(p_arguments);
-	data["result"] = _bounded_dictionary(p_result);
-	return _record("mcp", "request", p_error.is_empty() ? "info" : "error", p_correlation_id, data, p_error, r_error);
+	tool_registry = p_registry;
+	return OK;
 }
 
-Error MCPTraceService::record_tool_call(const String &p_tool_name, const String &p_session_id, const String &p_correlation_id, const Dictionary &p_arguments, const Dictionary &p_result, const Dictionary &p_error, String *r_error) {
-	if (!is_started()) {
-		_set_error(r_error, String());
-		return OK;
+void MCPTraceService::unregister_tools() {
+	if (tool_registry) {
+		if (tool_registry->get_trace_observer() == this) {
+			tool_registry->set_trace_observer(nullptr);
+		}
+		tool_registry = nullptr;
 	}
+	stop();
+}
+
+void MCPTraceService::configure_ordinary(const Dictionary &p_project_metadata) {
+	if (!tool_registry || OS::get_singleton()->get_environment("GODOT_MCP_TRACE") != "1") {
+		return;
+	}
+	String error;
+	if (start(p_project_metadata, "editor-mcp", OS::get_singleton()->get_environment("GODOT_MCP_TRACE_DIR"), &error) != OK) {
+		_report_failure(error);
+		return;
+	}
+	tool_registry->set_trace_observer(this);
+	print_error("MCP_TRACE_ENABLED: metadata-only trace " + writer.get_session_id());
+}
+
+void MCPTraceService::_report_failure(const String &p_error) {
+	MutexLock lock(mutex);
+	if (!last_error.is_empty()) {
+		return;
+	}
+	last_error = p_error.is_empty() ? String("Unable to write MCP trace.") : p_error;
+	if (tool_registry && tool_registry->get_trace_observer() == this) {
+		tool_registry->set_trace_observer(nullptr);
+	}
+	// Only fixed writer diagnostics reach stderr. Never print request content.
+	print_error("MCP_TRACE_FAILED: " + last_error);
+	writer.close();
+	started = false;
+}
+
+void MCPTraceService::_record_span(const MCPTraceSpan &p_span, bool p_finished) {
 	Dictionary data;
-	data["tool"] = _bounded_text(p_tool_name, 256);
-	data["sessionHash"] = _session_hash(p_session_id);
-	data["arguments"] = _bounded_dictionary(p_arguments);
-	data["result"] = _bounded_dictionary(p_result);
-	return _record("tool", "call", p_error.is_empty() ? "info" : "error", p_correlation_id, data, p_error, r_error);
+	data["name"] = p_span.name;
+	data["sessionHash"] = p_span.session_hash;
+	data["parentId"] = p_span.parent_id ? String::num_uint64(p_span.parent_id) : String();
+	data["rootId"] = String::num_uint64(p_span.root_id);
+	if (p_finished) {
+		static const char *outcomes[] = { "success", "business_error", "protocol_error", "notification" };
+		data["durationUsec"] = int64_t(p_span.duration_usec);
+		data["outcome"] = outcomes[p_span.outcome];
+		data["status"] = p_span.status;
+		data["isError"] = p_span.is_error;
+	}
+	String error;
+	const Error result = _record(p_span.kind == MCPTraceSpan::REQUEST ? "mcp" : "tool", p_finished ? "finished" : "started", p_finished && p_span.is_error ? "error" : "info", String::num_uint64(p_span.id), data, Dictionary(), &error);
+	if (result != OK) {
+		_report_failure(error);
+	}
+}
+
+void MCPTraceService::on_trace_started(const MCPTraceSpan &p_span) {
+	_record_span(p_span, false);
+}
+
+void MCPTraceService::on_trace_finished(const MCPTraceSpan &p_span) {
+	_record_span(p_span, true);
 }
 
 Error MCPTraceService::record_job_event(const String &p_job_id, const String &p_event, const String &p_severity, const Dictionary &p_data, const Dictionary &p_payloads, const Dictionary &p_error, String *r_error) {
@@ -236,10 +303,17 @@ Error MCPTraceService::record_job_event(const String &p_job_id, const String &p_
 
 void MCPTraceService::stop() {
 	MutexLock lock(mutex);
+	if (tool_registry && tool_registry->get_trace_observer() == this) {
+		tool_registry->set_trace_observer(nullptr);
+	}
 	if (!started) {
 		return;
 	}
-	writer.close();
+	String error;
+	if (writer.close(&error) != OK && last_error.is_empty()) {
+		last_error = error;
+		print_error("MCP_TRACE_FAILED: " + error);
+	}
 	started = false;
 }
 
@@ -257,6 +331,9 @@ Dictionary MCPTraceService::get_safe_reference(const String &p_correlation_id) c
 	MutexLock lock(mutex);
 	Dictionary reference;
 	reference["available"] = writer.is_open();
+	if (!last_error.is_empty()) {
+		reference["error"] = last_error;
+	}
 	const String writer_session_id = writer.get_session_id();
 	reference["traceId"] = writer_session_id.is_empty() ? String("active") : writer_session_id;
 	reference["manifest"] = "manifest.json";

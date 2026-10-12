@@ -31,6 +31,9 @@
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
 #include "core/io/json.h"
+#include "core/mcp/mcp_protocol.h"
+#include "core/object/callable_mp.h"
+#include "core/os/os.h"
 #include "editor/mcp/providers/mcp_trace_service.h"
 #include "tests/test_macros.h"
 
@@ -53,76 +56,251 @@ static Array _read_events(const String &p_session_directory) {
 	return events;
 }
 
-TEST_CASE("[MCP] Trace service is opt-in and records a single explicit lifecycle") {
+class TraceEnvironment {
+	String enabled = OS::get_singleton()->get_environment("GODOT_MCP_TRACE");
+	String directory = OS::get_singleton()->get_environment("GODOT_MCP_TRACE_DIR");
+	bool had_enabled = OS::get_singleton()->has_environment("GODOT_MCP_TRACE");
+	bool had_directory = OS::get_singleton()->has_environment("GODOT_MCP_TRACE_DIR");
+
+public:
+	~TraceEnvironment() {
+		if (had_enabled) {
+			OS::get_singleton()->set_environment("GODOT_MCP_TRACE", enabled);
+		} else {
+			OS::get_singleton()->unset_environment("GODOT_MCP_TRACE");
+		}
+		if (had_directory) {
+			OS::get_singleton()->set_environment("GODOT_MCP_TRACE_DIR", directory);
+		} else {
+			OS::get_singleton()->unset_environment("GODOT_MCP_TRACE_DIR");
+		}
+	}
+};
+
+class TraceProvider : public Object {
+public:
+	MCPToolRegistry *registry = nullptr;
+	int calls = 0;
+
+	Dictionary echo(const Dictionary &p_arguments, const Dictionary &p_context) {
+		calls++;
+		if (p_arguments.get("nested", false)) {
+			MCPToolCallContext context;
+			context.session = p_context.get("session", Dictionary());
+			registry->call_tool("trace.echo", Dictionary(), context);
+		}
+		return Dictionary{ { "structuredContent", p_arguments }, { "content", Array{ Dictionary{ { "type", "text" }, { "text", "result-content-secret" } } } }, { "isError", p_arguments.get("fail", false) } };
+	}
+
+	int invalid_result(const Dictionary &p_arguments, const Dictionary &p_context) {
+		return 42;
+	}
+};
+
+static Dictionary _request(const String &p_method, const Dictionary &p_params = Dictionary()) {
+	return Dictionary{ { "jsonrpc", "2.0" }, { "method", p_method }, { "id", "raw-request-id-secret" }, { "params", p_params } };
+}
+
+static void _initialize(MCPProtocol &p_protocol, const Dictionary &p_session) {
+	const Dictionary params{ { "protocolVersion", MCPProtocol::PROTOCOL_VERSION_2025_03_26 }, { "capabilities", Dictionary() }, { "clientInfo", Dictionary{ { "name", "raw-client-secret" }, { "version", "1" } } } };
+	p_protocol.dispatch(_request("initialize", params), p_session);
+	p_protocol.dispatch(Dictionary{ { "jsonrpc", "2.0" }, { "method", "notifications/initialized" } }, p_session);
+}
+
+TEST_CASE("[MCP] Ordinary trace is opt-in, payload-free and correlated through nested dispatch") {
+	TraceEnvironment environment;
 	Error error = OK;
 	Ref<DirAccess> temporary_directory = DirAccess::create_temp("mcp_trace_service", false, &error);
 	REQUIRE(error == OK);
 	const String root = temporary_directory->get_current_dir().path_join("traces");
+	OS::get_singleton()->set_environment("GODOT_MCP_TRACE_DIR", root);
+	MCPToolRegistry registry;
 	MCPTraceService service;
-	CHECK_FALSE(service.is_started());
-	CHECK(service.record_mcp_request("ping", "raw-session", "1", Dictionary()) == OK);
-	CHECK(service.record_tool_call("godot.test", "raw-session", "2", Dictionary()) == OK);
-	CHECK(service.record_job_event("job", "started", "info", Dictionary()) == OK);
-	CHECK_FALSE(DirAccess::dir_exists_absolute(root));
+	REQUIRE(service.register_tools(&registry) == OK);
+	MCPProtocol protocol(&registry);
+	const Dictionary session{ { "sessionId", "raw-session-secret" } };
+	for (const char *disabled : { "", "0", "off", "true" }) {
+		OS::get_singleton()->set_environment("GODOT_MCP_TRACE", disabled);
+		service.configure_ordinary(Dictionary());
+		protocol.dispatch(_request("ping"), session);
+		CHECK_FALSE(service.is_started());
+		CHECK(registry.get_trace_observer() == nullptr);
+		CHECK_FALSE(DirAccess::dir_exists_absolute(root));
+	}
 
-	Dictionary project;
-	project["projectId"] = "project";
-	project["projectPath"] = "C:/private/project/project.godot";
-	project["authToken"] = "project-token";
-	REQUIRE(service.start(project, "editor", root) == OK);
-	CHECK(service.is_started());
+	OS::get_singleton()->set_environment("GODOT_MCP_TRACE", "1");
+	service.configure_ordinary(Dictionary{ { "projectId", "project-id-secret" }, { "projectPath", "C:/private/project-secret" }, { "arbitrary", "manifest-secret" } });
+	REQUIRE(service.is_started());
+	REQUIRE(registry.get_trace_observer() == &service);
 	const String session_directory = service.get_session_directory();
-	CHECK(DirAccess::dir_exists_absolute(session_directory));
-	const Dictionary safe_reference = service.get_safe_reference("job-1");
-	CHECK(bool(safe_reference.get("available", false)));
-	CHECK_FALSE(String(safe_reference.get("traceId", String())).is_empty());
-	CHECK(String(safe_reference.get("manifest", String())) == "manifest.json");
-	CHECK_FALSE(JSON::stringify(safe_reference).contains(session_directory));
+	// Reconfiguration and explicit Harness starts cannot replace an active writer.
+	REQUIRE(service.start(Dictionary(), "editor-mcp-harness", root) == OK);
+	CHECK(service.get_session_directory() == session_directory);
 
-	Dictionary nested;
-	nested["password"] = "nested-password";
-	nested["filePath"] = "C:/users/private/source.gd";
-	nested["resourcePath"] = "res://scenes/main.tscn";
-	Dictionary arguments;
-	arguments["authorization"] = "Bearer raw-auth";
-	arguments["nested"] = nested;
-	Dictionary result;
-	result["ok"] = true;
-	Dictionary trace_error;
-	trace_error["secret"] = "error-secret";
-	const String raw_session = "session-secret-value";
-	REQUIRE(service.record_mcp_request("tools/call", raw_session, "request-1", arguments, result) == OK);
-	REQUIRE(service.record_tool_call("godot.scene.get_tree", raw_session, "request-1", arguments, result, trace_error) == OK);
-	REQUIRE(service.record_job_event("job-1", "completed", "info", result) == OK);
-	service.stop();
+	TraceProvider *provider = memnew(TraceProvider);
+	provider->registry = &registry;
+	REQUIRE(registry.register_tool(Dictionary{ { "name", "trace.echo" } }, callable_mp(provider, &TraceProvider::echo), provider) == OK);
+	REQUIRE(registry.register_tool(Dictionary{ { "name", "trace.invalid" } }, callable_mp(provider, &TraceProvider::invalid_result), provider) == OK);
+	_initialize(protocol, session);
+	Dictionary arguments{ { "opaque", "argument-secret" }, { "name", "credential-name" }, { "value", "name-value-secret" }, { "nested", true } };
+	protocol.dispatch(_request("tools/call", Dictionary{ { "name", "trace.echo" }, { "arguments", arguments } }), session);
+	protocol.dispatch(_request("tools/call", Dictionary{ { "name", "trace.echo" }, { "arguments", Dictionary{ { "fail", true } } } }), session);
+	protocol.dispatch(_request("tools/call", Dictionary{ { "name", "trace.invalid" } }), session);
+	protocol.dispatch(_request("tools/call", Dictionary{ { "name", "unknown-tool-secret" } }), session);
+	protocol.dispatch(_request("unknown-method-secret"), session);
+	protocol.dispatch(_request("tools/call", Dictionary{ { "arguments", "invalid-params-secret" } }), session);
+	protocol.dispatch(42, session);
+	ERR_PRINT_OFF;
+	protocol.dispatch_json("{raw-parse-secret", session);
+	ERR_PRINT_ON;
+	// A nested JSON-RPC array remains invalid and must never execute its tool.
+	const int previous_calls = provider->calls;
+	const Array nested{ Array{ _request("tools/call", Dictionary{ { "name", "trace.echo" } }) } };
+	const Array batch_response = protocol.dispatch(nested, session).response;
+	REQUIRE(batch_response.size() == 1);
+	CHECK(int(Dictionary(Dictionary(batch_response[0])["error"])["code"]) == MCPProtocol::INVALID_REQUEST);
+	CHECK(provider->calls == previous_calls);
+	MCPProtocol other_protocol(&registry);
+	const Dictionary other_session{ { "sessionId", "other-session-secret" } };
+	_initialize(other_protocol, other_session);
+	other_protocol.dispatch(_request("tools/call", Dictionary{ { "name", "trace.echo" } }), other_session);
+	service.unregister_tools();
+	service.shutdown();
 	service.stop();
 	CHECK_FALSE(service.is_started());
+	CHECK(registry.get_trace_observer() == nullptr);
+	registry.unregister_tools_for_owner(provider);
+	memdelete(provider);
 
 	const String manifest_text = FileAccess::get_file_as_string(session_directory.path_join("manifest.json"));
-	CHECK_FALSE(manifest_text.contains("project-token"));
-	CHECK_FALSE(manifest_text.contains("C:/private/project"));
-	CHECK(manifest_text.contains("project.godot"));
 	const Dictionary manifest = JSON::parse_string(manifest_text);
 	CHECK_FALSE(String(manifest.get("endedAtUtc", String())).is_empty());
-
+	CHECK(int(manifest["maxEventFiles"]) == 4);
 	const Array events = _read_events(session_directory);
-	REQUIRE(events.size() == 3);
-	String serialized;
-	for (const Variant &event : events) {
+	REQUIRE(events.size() > 20);
+	Dictionary started;
+	int business_errors = 0;
+	int protocol_errors = 0;
+	bool nested_tool = false;
+	bool saw_other_session = false;
+	String serialized = manifest_text;
+	for (const Variant &value : events) {
+		const Dictionary event = value;
 		serialized += JSON::stringify(event);
+		const Dictionary data = event["data"];
+		const String id = event["correlationId"];
+		const String session_hash = data["sessionHash"];
+		CHECK((session_hash == String("raw-session-secret").sha256_text().left(16) || session_hash == String("other-session-secret").sha256_text().left(16)));
+		saw_other_session |= session_hash == String("other-session-secret").sha256_text().left(16);
+		if (event["event"] == "started") {
+			CHECK_FALSE(started.has(id));
+			started[id] = event;
+			const String parent = data["parentId"];
+			if (!parent.is_empty()) {
+				REQUIRE(started.has(parent));
+				const Dictionary parent_event = started[parent];
+				CHECK(Dictionary(parent_event["data"])["sessionHash"] == session_hash);
+				CHECK(Dictionary(parent_event["data"])["rootId"] == data["rootId"]);
+				nested_tool |= event["category"] == "tool" && parent_event["category"] == "tool";
+			} else {
+				CHECK(data["rootId"] == id);
+			}
+		} else {
+			REQUIRE(started.has(id));
+			CHECK(int64_t(data["durationUsec"]) >= 0);
+			if (data["outcome"] == "business_error") {
+				business_errors++;
+				CHECK(bool(data["isError"]));
+				CHECK(event["severity"] == "error");
+			}
+			if (data["outcome"] == "protocol_error") {
+				protocol_errors++;
+				CHECK(bool(data["isError"]));
+			}
+			started.erase(id);
+		}
 	}
-	CHECK_FALSE(serialized.contains("raw-auth"));
-	CHECK_FALSE(serialized.contains("nested-password"));
-	CHECK_FALSE(serialized.contains("error-secret"));
-	CHECK_FALSE(serialized.contains(raw_session));
-	CHECK_FALSE(serialized.contains("C:/users/private"));
-	CHECK(serialized.contains("<redacted>"));
-	CHECK(serialized.contains(raw_session.sha256_text().left(16)));
-	CHECK(serialized.contains("source.gd"));
-	CHECK(serialized.contains("res://scenes/main.tscn"));
-	CHECK(Dictionary(events[0]).get("category", String()) == "mcp");
-	CHECK(Dictionary(events[1]).get("category", String()) == "tool");
-	CHECK(Dictionary(events[2]).get("category", String()) == "job");
+	CHECK(started.is_empty());
+	CHECK(nested_tool);
+	CHECK(saw_other_session);
+	CHECK(business_errors == 2); // Registry and enclosing protocol response.
+	CHECK(protocol_errors >= 7);
+	CHECK_FALSE(serialized.contains("secret"));
+	CHECK_FALSE(serialized.contains("credential-name"));
+	CHECK_FALSE(serialized.contains("C:/private"));
+}
+
+TEST_CASE("[MCP] Explicit Harness trace does not enable ordinary request tracing") {
+	TraceEnvironment environment;
+	OS::get_singleton()->set_environment("GODOT_MCP_TRACE", "0");
+	Error error = OK;
+	Ref<DirAccess> temporary_directory = DirAccess::create_temp("mcp_harness_trace_only", false, &error);
+	REQUIRE(error == OK);
+	MCPToolRegistry registry;
+	MCPTraceService service;
+	REQUIRE(service.register_tools(&registry) == OK);
+	service.configure_ordinary(Dictionary());
+	REQUIRE(service.start(Dictionary{ { "projectPath", "C:/private/project.godot" }, { "authToken", "hidden-token" } }, "editor-mcp-harness", temporary_directory->get_current_dir()) == OK);
+	MCPProtocol protocol(&registry);
+	protocol.dispatch(_request("ping"));
+	const String directory = service.get_session_directory();
+	const Dictionary manifest = JSON::parse_string(FileAccess::get_file_as_string(directory.path_join("manifest.json")));
+	CHECK(int(manifest["maxEventFiles"]) == 0);
+	CHECK(Dictionary(manifest["project"])["projectPath"] == "project.godot");
+	CHECK_FALSE(JSON::stringify(manifest).contains("hidden-token"));
+	CHECK(_read_events(directory).is_empty());
+	REQUIRE(service.record_job_event("job", "started", "info", Dictionary()) == OK);
+	CHECK(_read_events(directory).size() == 1);
+	service.unregister_tools();
+	REQUIRE(service.register_tools(&registry) == OK);
+	CHECK(registry.get_trace_observer() == nullptr);
+	service.unregister_tools();
+}
+
+TEST_CASE("[MCP] Ordinary trace initialization failure is nonfatal and leaves no observer") {
+	TraceEnvironment environment;
+	OS::get_singleton()->set_environment("GODOT_MCP_TRACE", "1");
+	OS::get_singleton()->set_environment("GODOT_MCP_TRACE_DIR", "relative-path-secret");
+	MCPToolRegistry registry;
+	MCPTraceService service;
+	REQUIRE(service.register_tools(&registry) == OK);
+	service.configure_ordinary(Dictionary());
+	CHECK_FALSE(service.is_started());
+	CHECK(registry.get_trace_observer() == nullptr);
+	CHECK_FALSE(String(service.get_safe_reference().get("error", String())).is_empty());
+	MCPProtocol protocol(&registry);
+	CHECK(Dictionary(protocol.dispatch(_request("ping")).response).has("result"));
+	service.unregister_tools();
+}
+
+TEST_CASE("[MCP] Ordinary trace write failure is nonfatal and stops repeated writes") {
+	TraceEnvironment environment;
+	Error error = OK;
+	Ref<DirAccess> temporary_directory = DirAccess::create_temp("mcp_trace_write_failure", false, &error);
+	REQUIRE(error == OK);
+	OS::get_singleton()->set_environment("GODOT_MCP_TRACE", "1");
+	OS::get_singleton()->set_environment("GODOT_MCP_TRACE_DIR", temporary_directory->get_current_dir());
+	MCPToolRegistry registry;
+	MCPTraceService service;
+	REQUIRE(service.register_tools(&registry) == OK);
+	service.configure_ordinary(Dictionary());
+	REQUIRE(service.is_started());
+	const String manifest = service.get_session_directory().path_join("manifest.json");
+	REQUIRE(DirAccess::remove_absolute(manifest) == OK);
+	REQUIRE(DirAccess::make_dir_absolute(manifest) == OK);
+	MCPProtocol protocol(&registry);
+	CHECK(Dictionary(protocol.dispatch(_request("ping")).response).has("result"));
+	CHECK_FALSE(service.is_started());
+	CHECK_FALSE(String(service.get_safe_reference().get("error", String())).is_empty());
+	CHECK(Dictionary(protocol.dispatch(_request("ping")).response).has("result"));
+	REQUIRE(DirAccess::remove_absolute(manifest) == OK);
+	CHECK(registry.get_trace_observer() == nullptr);
+	REQUIRE(service.start(Dictionary(), "editor-mcp-harness", temporary_directory->get_current_dir()) == OK);
+	const String harness_directory = service.get_session_directory();
+	CHECK(Dictionary(protocol.dispatch(_request("ping")).response).has("result"));
+	CHECK(_read_events(harness_directory).is_empty());
+	service.unregister_tools();
+	CHECK(registry.get_trace_observer() == nullptr);
 }
 
 TEST_CASE("[MCP] Trace service bounds structured fields and summarizes binary payloads") {

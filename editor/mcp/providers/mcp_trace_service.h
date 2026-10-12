@@ -31,10 +31,11 @@
 #pragma once
 
 #include "core/io/structured_trace_writer.h"
+#include "core/mcp/mcp_trace_observer.h"
 #include "core/os/mutex.h"
 #include "editor/mcp/mcp_editor_feature.h"
 
-class MCPTraceService : public MCPEditorFeature {
+class MCPTraceService : public MCPEditorFeature, public MCPTraceObserver {
 public:
 	static constexpr int MAX_DEPTH = 8;
 	static constexpr int MAX_CONTAINER_ENTRIES = 128;
@@ -44,8 +45,11 @@ public:
 	~MCPTraceService();
 
 	Error start(const Dictionary &p_project_metadata, const String &p_process_mode, const String &p_root_directory_override = String(), String *r_error = nullptr);
-	Error record_mcp_request(const String &p_method, const String &p_session_id, const String &p_correlation_id, const Dictionary &p_arguments, const Dictionary &p_result = Dictionary(), const Dictionary &p_error = Dictionary(), String *r_error = nullptr);
-	Error record_tool_call(const String &p_tool_name, const String &p_session_id, const String &p_correlation_id, const Dictionary &p_arguments, const Dictionary &p_result = Dictionary(), const Dictionary &p_error = Dictionary(), String *r_error = nullptr);
+	Error register_tools(MCPToolRegistry *p_registry, String *r_error = nullptr) override;
+	void unregister_tools() override;
+	void configure_ordinary(const Dictionary &p_project_metadata);
+	void on_trace_started(const MCPTraceSpan &p_span) override;
+	void on_trace_finished(const MCPTraceSpan &p_span) override;
 	Error record_job_event(const String &p_job_id, const String &p_event, const String &p_severity, const Dictionary &p_data, const Dictionary &p_payloads = Dictionary(), const Dictionary &p_error = Dictionary(), String *r_error = nullptr);
 	void stop();
 	void shutdown() override { stop(); }
@@ -68,6 +72,10 @@ private:
 
 	Error _record(const String &p_category, const String &p_event, const String &p_severity, const String &p_correlation_id, const Dictionary &p_data, const Dictionary &p_error, String *r_error);
 
+	void _record_span(const MCPTraceSpan &p_span, bool p_finished);
+	void _report_failure(const String &p_error);
+	MCPToolRegistry *tool_registry = nullptr;
+	String last_error;
 	StructuredTraceWriter writer;
 	bool started = false;
 	mutable Mutex mutex;

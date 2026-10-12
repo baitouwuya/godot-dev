@@ -34,6 +34,49 @@
 
 namespace {
 
+static String _trace_method(const Dictionary &p_request) {
+	const Variant method = p_request.get("method", Variant());
+	if (method.get_type() != Variant::STRING) {
+		return "invalid";
+	}
+	const String name = method;
+	if (name == "initialize" || name == "notifications/initialized" || name == "ping" || name == "tools/list" || name == "tools/call") {
+		return name;
+	}
+	return "unknown";
+}
+
+static void _finish_request_trace(MCPTraceScope &p_trace, const Variant &p_response) {
+	if (p_response.get_type() == Variant::NIL) {
+		p_trace.finish(MCPTraceSpan::NOTIFICATION);
+		return;
+	}
+	if (p_response.get_type() == Variant::ARRAY) {
+		const Array responses = p_response;
+		for (const Variant &value : responses) {
+			if (value.get_type() != Variant::DICTIONARY) {
+				continue;
+			}
+			const Dictionary response = value;
+			if (response.has("error")) {
+				_finish_request_trace(p_trace, response);
+				return;
+			}
+			_finish_request_trace(p_trace, response);
+		}
+		return;
+	}
+	if (p_response.get_type() == Variant::DICTIONARY) {
+		const Dictionary response = p_response;
+		if (response.has("error")) {
+			const Dictionary error = response["error"];
+			p_trace.finish(MCPTraceSpan::PROTOCOL_ERROR, error.get("code", 0), true);
+		} else if (response.get("result", Variant()).get_type() == Variant::DICTIONARY && bool(Dictionary(response["result"]).get("isError", false))) {
+			p_trace.finish(MCPTraceSpan::BUSINESS_ERROR, 0, true);
+		}
+	}
+}
+
 static void _compact_structured_tool_content(Dictionary &r_result) {
 	if (r_result.get("isError", false) || !r_result.has("structuredContent")) {
 		return;
@@ -223,6 +266,13 @@ Variant MCPProtocol::_handle_tools_call(const Dictionary &p_params, const Varian
 }
 
 Variant MCPProtocol::_dispatch_request(const Dictionary &p_request, bool &r_respond, const Dictionary &p_session_context) {
+	MCPTraceScope trace(tool_registry ? tool_registry->get_trace_observer() : nullptr, MCPTraceSpan::REQUEST, _trace_method(p_request), p_session_context.get("sessionId", String()));
+	const Variant response = _dispatch_request_impl(p_request, r_respond, p_session_context);
+	_finish_request_trace(trace, response);
+	return response;
+}
+
+Variant MCPProtocol::_dispatch_request_impl(const Dictionary &p_request, bool &r_respond, const Dictionary &p_session_context) {
 	r_respond = true;
 	if (p_request.get("jsonrpc", String()) != "2.0" || !p_request.has("method") || p_request["method"].get_type() != Variant::STRING || String(p_request["method"]).is_empty()) {
 		return _make_error(Variant(), INVALID_REQUEST, "Invalid JSON-RPC request.");
@@ -286,6 +336,8 @@ Variant MCPProtocol::_dispatch_batch(const Array &p_requests, const Dictionary &
 	Array responses;
 	for (const Variant &request_value : p_requests) {
 		if (request_value.get_type() != Variant::DICTIONARY) {
+			MCPTraceScope trace(tool_registry ? tool_registry->get_trace_observer() : nullptr, MCPTraceSpan::REQUEST, "invalid", p_session_context.get("sessionId", String()));
+			trace.finish(MCPTraceSpan::PROTOCOL_ERROR, INVALID_REQUEST, true);
 			responses.push_back(_make_error(Variant(), INVALID_REQUEST, "Invalid JSON-RPC request."));
 			continue;
 		}
@@ -301,10 +353,14 @@ Variant MCPProtocol::_dispatch_batch(const Array &p_requests, const Dictionary &
 MCPProtocol::DispatchResult MCPProtocol::dispatch(const Variant &p_message, const Dictionary &p_session_context) {
 	DispatchResult result;
 	if (p_message.get_type() == Variant::ARRAY) {
+		MCPTraceScope trace(tool_registry ? tool_registry->get_trace_observer() : nullptr, MCPTraceSpan::REQUEST, "batch", p_session_context.get("sessionId", String()));
 		result.response = _dispatch_batch(Array(p_message), p_session_context);
+		_finish_request_trace(trace, result.response);
 		return result;
 	}
 	if (p_message.get_type() != Variant::DICTIONARY) {
+		MCPTraceScope trace(tool_registry ? tool_registry->get_trace_observer() : nullptr, MCPTraceSpan::REQUEST, "invalid", p_session_context.get("sessionId", String()));
+		trace.finish(MCPTraceSpan::PROTOCOL_ERROR, INVALID_REQUEST, true);
 		result.response = _make_error(Variant(), INVALID_REQUEST, "Invalid JSON-RPC request.");
 		return result;
 	}
@@ -320,6 +376,8 @@ MCPProtocol::DispatchResult MCPProtocol::dispatch(const Variant &p_message, cons
 MCPProtocol::DispatchResult MCPProtocol::dispatch_json(const String &p_json, const Dictionary &p_session_context) {
 	JSON json;
 	if (json.parse(p_json) != OK) {
+		MCPTraceScope trace(tool_registry ? tool_registry->get_trace_observer() : nullptr, MCPTraceSpan::REQUEST, "parse", p_session_context.get("sessionId", String()));
+		trace.finish(MCPTraceSpan::PROTOCOL_ERROR, PARSE_ERROR, true);
 		DispatchResult result;
 		result.response = _make_error(Variant(), PARSE_ERROR, "Parse error.");
 		return result;

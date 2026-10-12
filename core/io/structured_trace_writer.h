@@ -50,6 +50,7 @@ public:
 	struct Options {
 		String root_directory_override;
 		uint64_t max_event_file_bytes = 8 * 1024 * 1024;
+		int max_event_files = 0; // Zero preserves all files; otherwise rotate a bounded window.
 		uint64_t inline_payload_max_bytes = 4 * 1024;
 		int max_sessions = MAX_SESSIONS;
 		int max_session_age_days = MAX_SESSION_AGE_DAYS;
@@ -72,7 +73,7 @@ public:
 	Error open(const Dictionary &p_project_metadata, const Dictionary &p_process_metadata, String *r_error = nullptr);
 	Error open(const Dictionary &p_project_metadata, const Dictionary &p_process_metadata, const Options &p_options, String *r_error = nullptr);
 	Error record(const String &p_category, const String &p_event, const String &p_severity, const String &p_correlation_id, const Dictionary &p_data, const Dictionary &p_payloads = Dictionary(), const Dictionary &p_error = Dictionary(), String *r_error = nullptr);
-	void close();
+	Error close(String *r_error = nullptr);
 
 	Error make_text_payload(const String &p_name, const String &p_mime, const String &p_text, PayloadDescriptor &r_descriptor, String *r_error = nullptr);
 	Error make_json_payload(const String &p_name, const Variant &p_value, PayloadDescriptor &r_descriptor, String *r_error = nullptr);
@@ -105,7 +106,7 @@ private:
 	static bool _metadata_is_bounded(const Dictionary &p_metadata);
 
 	void _reset_no_lock();
-	void _close_no_lock();
+	Error _close_no_lock(String *r_error = nullptr);
 	Error _validate_options(const Options &p_options, String *r_error) const;
 	Error _cleanup_old_sessions(String *r_error);
 	Error _write_manifest(String *r_error = nullptr);
