@@ -89,10 +89,19 @@ struct EditorHelpTestAccess {
 
 namespace TestEditorHelp {
 
+class TestableEditorFileSystem : public EditorFileSystem {
+public:
+	void release_directory_tree() {
+		// Exercise the real filesystem teardown without sending an invalid exit
+		// notification to Node, since this fixture was never added to a SceneTree.
+		EditorFileSystem::_notification(NOTIFICATION_EXIT_TREE);
+	}
+};
+
 class ScopedEditorFileSystem {
 	ResourceLoaderImport previous_import = ResourceLoader::import;
 	ResourceFormatImporterLoadOnStartup previous_load_on_startup = ResourceImporter::load_on_startup;
-	EditorFileSystem *filesystem = memnew(EditorFileSystem);
+	TestableEditorFileSystem *filesystem = memnew(TestableEditorFileSystem);
 
 public:
 	~ScopedEditorFileSystem() {
@@ -101,7 +110,7 @@ public:
 		ResourceImporter::load_on_startup = previous_load_on_startup;
 	}
 
-	EditorFileSystem *get() const {
+	TestableEditorFileSystem *get() const {
 		return filesystem;
 	}
 };
@@ -168,7 +177,7 @@ TEST_CASE("[EditorHelp] Script cache callbacks tolerate a filesystem that has ex
 	DocTools *doc = EditorHelpTestAccess::get_doc();
 
 	// EXIT_TREE releases the directory before the singleton itself is destroyed.
-	filesystem.get()->notification(Node::NOTIFICATION_EXIT_TREE);
+	filesystem.get()->release_directory_tree();
 	REQUIRE(EditorFileSystem::get_singleton() == filesystem.get());
 	REQUIRE(filesystem.get()->get_filesystem() == nullptr);
 
