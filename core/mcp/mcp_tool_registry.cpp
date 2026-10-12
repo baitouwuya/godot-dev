@@ -299,11 +299,11 @@ MCPToolRegistry::CallResult MCPToolRegistry::call_tool(const StringName &p_name,
 			return call_result;
 		}
 
-		MCPJSONSchemaValidator::ValidationError validation_error;
+		MCPJSONSchemaValidator::ValidationError output_validation_error;
 		const Dictionary output_schema = entry->definition["outputSchema"];
-		if (!MCPJSONSchemaValidator::validate(result_dictionary["structuredContent"], output_schema, validation_error)) {
+		if (!MCPJSONSchemaValidator::validate(result_dictionary["structuredContent"], output_schema, output_validation_error)) {
 			call_result.status = CALL_INVALID_RESULT;
-			call_result.message = "Tool handler returned invalid structuredContent for '" + String(p_name) + "': " + validation_error.message;
+			call_result.message = "Tool handler returned invalid structuredContent for '" + String(p_name) + "': " + output_validation_error.message;
 			return call_result;
 		}
 	}
