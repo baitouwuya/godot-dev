@@ -46,6 +46,10 @@ void MCPEditorPlugin::configure(bool p_requested, int p_port, MCPProjectInstance
 	editor_instance = p_instance;
 }
 
+bool MCPEditorPlugin::_is_headless() const {
+	return !DisplayServer::get_singleton() || DisplayServer::get_singleton()->get_name() == "headless";
+}
+
 Error MCPEditorPlugin::_register_tools(String &r_error) {
 	const Error prepare_error = builtin_features.prepare_for_registration(r_error);
 	if (prepare_error != OK) {

@@ -77,6 +77,7 @@ class MCPEditorPlugin : public EditorPlugin, public MCPHostSessionObserver {
 	Error _publish_discovery(String &r_error);
 	void _handle_start_error(Error p_error, const String &p_message);
 	void _exit_with_error(const String &p_message);
+	bool _is_headless() const;
 	void on_mcp_session_removed(const String &p_session_id) override;
 
 public:
