@@ -185,12 +185,16 @@ MCPCLIStdioBridge::Result MCPCLIStdioBridge::run() {
 		if (read_status == MCPCLIIO::READ_EOF) {
 			return RESULT_OK;
 		}
+		if (read_status == MCPCLIIO::READ_ERROR) {
+			_diagnose("stdin could not be read.");
+			return RESULT_TRANSPORT_FAILED;
+		}
 		if (read_status == MCPCLIIO::READ_TOO_LARGE) {
 			_diagnose("stdin JSON-RPC line exceeds the configured size limit.");
 			return RESULT_PROTOCOL_FAILED;
 		}
 		if (read_status == MCPCLIIO::READ_INVALID_ENCODING) {
-			_diagnose("stdin contains invalid UTF-8.");
+			_diagnose("stdin contains invalid UTF-8 or a NUL byte.");
 			return RESULT_PROTOCOL_FAILED;
 		}
 		if (line.strip_edges().is_empty()) {

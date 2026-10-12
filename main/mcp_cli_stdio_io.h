@@ -38,6 +38,7 @@ public:
 	enum ReadStatus {
 		READ_LINE,
 		READ_EOF,
+		READ_ERROR,
 		READ_TOO_LARGE,
 		READ_INVALID_ENCODING,
 	};

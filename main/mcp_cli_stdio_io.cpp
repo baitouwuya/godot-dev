@@ -34,6 +34,12 @@
 
 #include <cstdio>
 
+#ifdef UNIX_ENABLED
+#include <unistd.h>
+
+#include <cerrno>
+#endif
+
 namespace {
 
 constexpr uint64_t STDIN_READ_CHUNK_BYTES = 8192;
@@ -46,9 +52,14 @@ MCPCLIIO::ReadStatus MCPOSCLIIO::read_line(String &r_line, uint64_t p_max_line_b
 		return READ_TOO_LARGE;
 	}
 
+	int scanned_bytes = 0;
 	while (true) {
 		int line_end = -1;
-		for (int i = 0; i < pending_input.size(); i++) {
+		for (int i = scanned_bytes; i < pending_input.size(); i++) {
+			// String decoding treats NUL as a terminator, but JSON-RPC cannot contain raw NUL.
+			if (pending_input[i] == 0) {
+				return READ_INVALID_ENCODING;
+			}
 			if (pending_input[i] == '\n') {
 				line_end = i;
 				break;
@@ -73,7 +84,10 @@ MCPCLIIO::ReadStatus MCPOSCLIIO::read_line(String &r_line, uint64_t p_max_line_b
 			return decode_error == OK ? READ_LINE : READ_INVALID_ENCODING;
 		}
 
-		if ((uint64_t)pending_input.size() > p_max_line_bytes) {
+		// A trailing CR may still be followed by LF and does not count toward the line limit.
+		const uint64_t content_bytes = pending_input.size() -
+				(!pending_input.is_empty() && pending_input[pending_input.size() - 1] == '\r' ? 1 : 0);
+		if (content_bytes > p_max_line_bytes) {
 			pending_input.clear();
 			return READ_TOO_LARGE;
 		}
@@ -81,15 +95,26 @@ MCPCLIIO::ReadStatus MCPOSCLIIO::read_line(String &r_line, uint64_t p_max_line_b
 			return READ_EOF;
 		}
 
-		PackedByteArray chunk = OS::get_singleton()->get_stdin_buffer(STDIN_READ_CHUNK_BYTES);
-		int chunk_size = chunk.size();
-		// Windows keeps the requested buffer size and zero-fills bytes beyond the read count.
-		for (int i = 0; i < chunk_size; i++) {
-			if (chunk[i] == 0) {
-				chunk_size = i;
-				break;
-			}
+		scanned_bytes = pending_input.size();
+		PackedByteArray chunk;
+#ifdef UNIX_ENABLED
+		// OS_Unix::get_stdin_buffer() uses fread(), which waits for the entire
+		// requested buffer (or EOF). A live MCP client waits for our response
+		// before sending its next request, so read only the bytes available now.
+		chunk.resize(STDIN_READ_CHUNK_BYTES);
+		ssize_t bytes_read;
+		do {
+			bytes_read = ::read(STDIN_FILENO, chunk.ptrw(), STDIN_READ_CHUNK_BYTES);
+		} while (bytes_read < 0 && errno == EINTR);
+		if (bytes_read < 0) {
+			return READ_ERROR;
 		}
+		const int chunk_size = (int)bytes_read;
+#else
+		// Windows uses ReadFile(), which already returns after a partial pipe read.
+		chunk = OS::get_singleton()->get_stdin_buffer(STDIN_READ_CHUNK_BYTES);
+		const int chunk_size = chunk.size();
+#endif
 		if (chunk_size == 0) {
 			input_finished = true;
 			continue;

@@ -63,6 +63,7 @@ String find_request_header(const Vector<String> &p_headers, const String &p_name
 
 class MemoryCLIIO final : public MCPCLIIO {
 public:
+	ReadStatus terminal_read_status = READ_EOF;
 	Vector<String> input_lines;
 	Vector<String> stdout_lines;
 	Vector<String> stderr_lines;
@@ -70,7 +71,7 @@ public:
 
 	ReadStatus read_line(String &r_line, uint64_t p_max_line_bytes) override {
 		if (next_input >= input_lines.size()) {
-			return READ_EOF;
+			return terminal_read_status;
 		}
 		r_line = input_lines[next_input++];
 		return (uint64_t)r_line.utf8().length() > p_max_line_bytes ? READ_TOO_LARGE : READ_LINE;
@@ -99,6 +100,8 @@ public:
 	Vector<Request> requests;
 	Vector<MCPCLIHTTPResponse> responses;
 	int next_response = 0;
+	int fail_request_index = -1;
+	Error request_failure = ERR_UNAVAILABLE;
 
 	Error request(
 			MCPCLITransport::RequestMethod p_method,
@@ -117,6 +120,10 @@ public:
 		request.timeout_ms = p_timeout_ms;
 		request.max_response_bytes = p_max_response_bytes;
 		requests.push_back(request);
+		if (requests.size() - 1 == fail_request_index) {
+			r_error = "Simulated request failure.";
+			return request_failure;
+		}
 		if (next_response >= responses.size()) {
 			r_error = "No queued response.";
 			return ERR_UNAVAILABLE;
@@ -194,6 +201,51 @@ TEST_CASE("[MCP][CLI] Stdio bridge classifies transport failures without a disco
 	REQUIRE(transport.requests.size() == 1);
 	CHECK(transport.requests[0].timeout_ms == 50);
 	CHECK(transport.requests[0].max_response_bytes == 2048);
+}
+
+TEST_CASE("[MCP][CLI] Stdio read errors are not treated as successful EOF") {
+	MemoryCLIIO io;
+	io.terminal_read_status = MCPCLIIO::READ_ERROR;
+	QueueCLITransport transport;
+	MCPDiscoveryRecord record;
+	MCPCLIStdioBridge bridge(&transport, &io, record, MCPCLIStdioBridge::Limits());
+	CHECK(bridge.run() == MCPCLIStdioBridge::RESULT_TRANSPORT_FAILED);
+	CHECK(transport.requests.is_empty());
+	CHECK(io.stdout_lines.is_empty());
+	REQUIRE(io.stderr_lines.size() == 1);
+	CHECK(io.stderr_lines[0] == "MCP CLI: stdin could not be read.");
+}
+
+TEST_CASE("[MCP][CLI] A timed out mutation is never replayed and only its session is closed") {
+	MemoryCLIIO io;
+	io.input_lines.push_back(
+			R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}})");
+	const String mutation = R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"godot.node.create","arguments":{"type":"Node","name":"Once"}}})";
+	io.input_lines.push_back(mutation);
+	QueueCLITransport transport;
+	transport.responses.push_back(make_response(
+			200,
+			R"({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}})",
+			"session-timeout"));
+	transport.responses.push_back(make_response(204));
+	transport.fail_request_index = 1;
+	transport.request_failure = ERR_TIMEOUT;
+	MCPDiscoveryRecord record;
+	record.endpoint = "http://127.0.0.1:35001/mcp";
+	record.protocol_version = MCPProtocol::PROTOCOL_VERSION_LATEST;
+	record.auth_secret = "private-token";
+	MCPCLIStdioBridge bridge(&transport, &io, record, MCPCLIStdioBridge::Limits());
+	CHECK(bridge.run() == MCPCLIStdioBridge::RESULT_TRANSPORT_FAILED);
+	REQUIRE(transport.requests.size() == 3);
+	CHECK(transport.requests[0].method == MCPCLITransport::REQUEST_POST);
+	CHECK(transport.requests[1].method == MCPCLITransport::REQUEST_POST);
+	CHECK(transport.requests[1].body == mutation);
+	CHECK(transport.requests[2].method == MCPCLITransport::REQUEST_DELETE);
+	CHECK(transport.requests[2].body.is_empty());
+	CHECK(find_request_header(transport.requests[2].headers, "mcp-session-id") == "session-timeout");
+	CHECK(io.stdout_lines.size() == 1);
+	REQUIRE(io.stderr_lines.size() == 1);
+	CHECK_FALSE(io.stderr_lines[0].contains(record.auth_secret));
 }
 
 TEST_CASE("[MCP][CLI] Discover routes through the command registry without exposing secrets") {

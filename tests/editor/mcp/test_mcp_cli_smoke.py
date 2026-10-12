@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -15,8 +16,11 @@ from mcp_smoke_test_utils import (
     SmokeFailure,
     describe_command_result,
     invoke_stdio,
+    json_line,
     load_tool_manifest,
+    notification,
     parse_discovery,
+    parse_jsonrpc_responses,
     request,
     require,
     tool_call,
@@ -187,6 +191,112 @@ def wait_for_file(host: HostProcess, relative_path: str, timeout: int) -> None:
     wait_until(timeout, attempt, f"{host.label} file {relative_path}")
 
 
+def check_persistent_stdio(runner: ProcessRunner, host: HostProcess, discovery: Mapping[str, Any]) -> None:
+    initialize = request(
+        1,
+        "initialize",
+        {
+            "protocolVersion": discovery["protocolVersion"],
+            "capabilities": {},
+            "clientInfo": {"name": "mcp-中文-🧪", "version": "1"},
+        },
+    )
+    with runner.start_stdio(host.project_path, "fragmented persistent stdio") as bridge:
+        encoded = json.dumps(initialize, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        split = encoded.index("中".encode("utf-8")) + 1
+        bridge.send_bytes(encoded[:split])
+        bridge.require_no_response()
+        bridge.send_bytes(encoded[split:] + b"\r")
+        bridge.require_no_response()
+        bridge.send_bytes(b"\n")
+        response = bridge.read_response(1)
+        require("result" in response, "fragmented UTF-8 initialize did not succeed with stdin open.")
+
+        # Several messages in one write must retain their individual boundaries.
+        messages = [notification("notifications/initialized", {}), request(2, "ping", {}), request(3, "tools/list", {})]
+        bridge.send_bytes(("\n\r\n" + "\n".join(json_line(message) for message in messages) + "\n").encode("utf-8"))
+        require("result" in bridge.read_response(2), "coalesced ping did not succeed.")
+        require("tools" in bridge.read_response(3).get("result", {}), "coalesced tools/list did not succeed.")
+
+        # The byte limit excludes a split CRLF delimiter, including at exactly 1 MiB.
+        boundary = json_line(request(4, "ping", {})).encode("utf-8")
+        bridge.send_bytes(boundary + b" " * (1024 * 1024 - len(boundary)) + b"\r")
+        bridge.require_no_response()
+        bridge.send_bytes(b"\n")
+        require("result" in bridge.read_response(4), "maximum-size CRLF request did not succeed.")
+
+        # EOF flushes a final unterminated line, then closes only the bridge session.
+        bridge.send_bytes(json_line(request(5, "ping", {})).encode("utf-8"))
+        result = bridge.finish()
+        responses = parse_jsonrpc_responses(result, [1, 2, 3, 4, 5], "persistent stdio EOF")
+        require("result" in responses[5], "EOF lost the final unterminated request.")
+        require(not result.stderr.strip(), f"successful persistent stdio emitted diagnostics: {result.stderr!r}")
+
+    for label, payload, diagnostic in [
+        ("oversized line", b" " * (1024 * 1024 + 1), "size limit"),
+        ("invalid UTF-8", b'{"jsonrpc":"2.0","id":2,"method":"\xff"}\n', "invalid UTF-8"),
+        ("embedded NUL", json_line(request(2, "ping", {})).encode("utf-8") + b"\x00ignored\n", "NUL"),
+    ]:
+        with runner.start_stdio(host.project_path, label) as bridge:
+            bridge.exchange(initialize)
+            bridge.send_bytes(payload)
+            # Rejection must not wait for EOF either.
+            wait_until(runner.timeout_seconds, lambda: bridge.process.poll() is not None, label)
+            result = bridge.finish()
+            require(result.returncode != 0, f"{label} unexpectedly succeeded.")
+            require(diagnostic in result.stderr, f"{label} did not report a bounded diagnostic.")
+            require(len(result.stdout.splitlines()) == 1, f"{label} forwarded malformed input to the Host.")
+
+    host.require_running()
+    after_eof = wait_for_discovery(runner, host, runner.timeout_seconds)
+    require(
+        (after_eof["pid"], after_eof["instanceId"]) == (discovery["pid"], discovery["instanceId"]),
+        "bridge EOF or protocol errors replaced or stopped the Host.",
+    )
+
+
+def check_persistent_async_job(
+    runner: ProcessRunner, project_path: Path, protocol_version: str, runtime_generation: int
+) -> None:
+    with runner.start_stdio(project_path, "persistent async performance job") as bridge:
+        bridge.exchange(
+            request(
+                1,
+                "initialize",
+                {
+                    "protocolVersion": protocol_version,
+                    "capabilities": {},
+                    "clientInfo": {"name": "godot-mcp-persistent-smoke", "version": "1"},
+                },
+            )
+        )
+        bridge.send(notification("notifications/initialized", {}))
+        started = bridge.exchange(
+            tool_call(2, "godot.runtime.performance.start", {"maxFrames": 8, "runtimeGeneration": runtime_generation})
+        )
+        job_id = structured_result({2: started}, 2, "persistent performance/start").get("jobId")
+        require(isinstance(job_id, str) and job_id, "persistent async start did not return a job ID.")
+        arguments = {"jobId": job_id, "runtimeGeneration": runtime_generation}
+        last_id = 2
+
+        def completed() -> Optional[dict[str, Any]]:
+            nonlocal last_id
+            last_id += 1
+            response = bridge.exchange(tool_call(last_id, "godot.runtime.performance.status", arguments))
+            status = structured_result({last_id: response}, last_id, "persistent performance/status")
+            require(status.get("jobId") == job_id, "persistent async status resolved a different job.")
+            require(status.get("state") in ("running", "completed"), f"async job failed: {status}")
+            return status if status.get("state") == "completed" else None
+
+        status = wait_until(runner.timeout_seconds, completed, "async performance completion with stdin open")
+        require(int(status.get("capturedFrames", 0)) == 8, "async job completed without capturing its frames.")
+        last_id += 1
+        stopped = bridge.exchange(tool_call(last_id, "godot.runtime.performance.stop", arguments))
+        summary = structured_result({last_id: stopped}, last_id, "persistent performance/stop")
+        require(summary.get("jobId") == job_id, "persistent async stop resolved a different job.")
+        parse_jsonrpc_responses(bridge.finish(), range(1, last_id + 1), "persistent async performance session")
+
+
 def run_smoke(binary: str, timeout: int, keep_temporary_projects: bool) -> None:
     manifest_path = Path(__file__).parent / "data/mcp_tool_manifest.json"
     expected_tools = load_tool_manifest(manifest_path)
@@ -267,7 +377,8 @@ def run_smoke(binary: str, timeout: int, keep_temporary_projects: bool) -> None:
             "same-project conflict replaced the owner record.",
         )
 
-        print("[6/9] Checking stdio JSON, 111-tool manifest, settings, classes, and scripts")
+        print("[6/9] Checking persistent stdio, JSON, 111-tool manifest, settings, classes, and scripts")
+        check_persistent_stdio(runner, host_a, discovery_a)
         surface_requests = [
             request(2, "tools/list", {}),
             tool_call(3, "godot.script.create", {"path": "res://mcp_smoke_created.gd", "text": INITIAL_SCRIPT_TEXT}),
@@ -659,6 +770,8 @@ windows.debug = "res://smoke.dll"
             "runtime session did not expose runtimeGeneration.",
         )
 
+        check_persistent_async_job(runner, project_a, discovery_a["protocolVersion"], runtime_generation)
+
         runtime_mutation_flow = invoke_stdio(
             runner,
             project_a,
@@ -738,6 +851,14 @@ windows.debug = "res://smoke.dll"
             performance_stop.get("jobId") == performance_start.get("jobId"),
             "performance stop did not resolve the client alias.",
         )
+
+        after_bridge_eof = running_state()
+        require(after_bridge_eof is not None, "bridge EOF stopped the running game.")
+        require(
+            after_bridge_eof is not None and after_bridge_eof.get("processId") == runtime_state["processId"],
+            "bridge EOF replaced the running game process.",
+        )
+        host_a.require_running()
 
         def runtime_errors() -> Optional[dict[str, Any]]:
             errors_flow = invoke_stdio(

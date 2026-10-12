@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -145,6 +147,122 @@ class HostProcess:
         return result
 
 
+class StdioProcess:
+    """A real interactive pipe: receiving a response must never require stdin EOF."""
+
+    def __init__(self, runner: ProcessRunner, project_path: Path, label: str) -> None:
+        self.label = label
+        self.timeout_seconds = runner.timeout_seconds
+        self.arguments = [str(runner.binary), "--verbose", "--mcp-stdio", "--path", str(project_path)]
+        self.process = subprocess.Popen(
+            self.arguments,
+            cwd=str(runner.working_directory),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=_creation_flags(),
+        )
+        self._responses: queue.Queue[Optional[bytes]] = queue.Queue()
+        self._stdout: list[bytes] = []
+        self._stderr: list[bytes] = []
+        self._readers = [
+            threading.Thread(target=self._read_stdout, daemon=True),
+            threading.Thread(target=self._read_stderr, daemon=True),
+        ]
+        for reader in self._readers:
+            reader.start()
+
+    def _read_stdout(self) -> None:
+        assert self.process.stdout is not None
+        try:
+            for line in iter(self.process.stdout.readline, b""):
+                self._stdout.append(line)
+                self._responses.put(line)
+        finally:
+            self._responses.put(None)
+
+    def _read_stderr(self) -> None:
+        assert self.process.stderr is not None
+        for line in iter(self.process.stderr.readline, b""):
+            self._stderr.append(line)
+
+    def __enter__(self) -> StdioProcess:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        if self.process.poll() is None:
+            self.process.kill()
+        self.process.wait(timeout=5)
+        for reader in self._readers:
+            reader.join(timeout=5)
+        for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
+            if stream is not None:
+                stream.close()
+
+    def result(self) -> CommandResult:
+        return CommandResult(
+            returncode=self.process.returncode if self.process.returncode is not None else -1,
+            stdout=b"".join(self._stdout).decode("utf-8", errors="replace"),
+            stderr=b"".join(self._stderr).decode("utf-8", errors="replace"),
+            arguments=self.arguments,
+        )
+
+    def send_bytes(self, data: bytes) -> None:
+        assert self.process.stdin is not None
+        require(not self.process.stdin.closed, f"{self.label} stdin was already closed.")
+        try:
+            self.process.stdin.write(data)
+            self.process.stdin.flush()
+        except (BrokenPipeError, OSError) as error:
+            raise SmokeFailure(f"{self.label} stdin write failed: {describe_command_result(self.result())}") from error
+
+    def send(self, message: Mapping[str, Any]) -> None:
+        self.send_bytes((json_line(message) + "\n").encode("utf-8"))
+
+    def read_response(self, request_id: int) -> dict[str, Any]:
+        try:
+            line = self._responses.get(timeout=self.timeout_seconds)
+        except queue.Empty as error:
+            raise SmokeFailure(
+                f"{self.label} timed out waiting for response {request_id} with stdin still open: "
+                f"{describe_command_result(self.result())}"
+            ) from error
+        require(line is not None, f"{self.label} stdout closed before response {request_id}.")
+        try:
+            text = cast(bytes, line).decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise SmokeFailure(f"{self.label} emitted invalid UTF-8.") from error
+        result = CommandResult(0, text, self.result().stderr, self.arguments)
+        return parse_jsonrpc_responses(result, [request_id], self.label)[request_id]
+
+    def exchange(self, message: Mapping[str, Any]) -> dict[str, Any]:
+        self.send(message)
+        return self.read_response(cast(int, message["id"]))
+
+    def require_no_response(self, seconds: float = 0.1) -> None:
+        try:
+            line = self._responses.get(timeout=seconds)
+        except queue.Empty:
+            require(self.process.poll() is None, f"{self.label} exited during an incomplete line.")
+            return
+        raise SmokeFailure(f"{self.label} emitted output before a complete line: {line!r}")
+
+    def close_input(self) -> None:
+        assert self.process.stdin is not None
+        self.process.stdin.close()
+
+    def finish(self) -> CommandResult:
+        self.close_input()
+        try:
+            self.process.wait(timeout=self.timeout_seconds)
+        except subprocess.TimeoutExpired as error:
+            raise SmokeFailure(f"{self.label} did not exit after stdin EOF.") from error
+        for reader in self._readers:
+            reader.join(timeout=5)
+            require(not reader.is_alive(), f"{self.label} output pipe did not close.")
+        return self.result()
+
+
 class ProcessRunner:
     def __init__(self, binary: Path, working_directory: Path, timeout_seconds: int) -> None:
         self.binary = binary
@@ -203,6 +321,9 @@ class ProcessRunner:
             stderr=completed.stderr,
             arguments=command,
         )
+
+    def start_stdio(self, project_path: Path, label: str) -> StdioProcess:
+        return StdioProcess(self, project_path, label)
 
     def start_host(self, project_path: Path, label: str) -> HostProcess:
         return HostProcess(self.host_binary, project_path, label, self.working_directory)
@@ -352,10 +473,14 @@ def invoke_stdio(
         tool_name = params.get("name") if isinstance(params, dict) else None
         suffix = f", tool={tool_name}" if isinstance(tool_name, str) else ""
         request_descriptions.append(f"{method} (id={request_id}{suffix})")
-    result = runner.invoke(
-        ["--verbose", "--mcp-stdio", "--path", str(project_path)],
-        [json_line(initialize), json_line(initialized), *(json_line(item) for item in requests)],
-    )
+    # Do not batch everything through subprocess.run(input=...), which closes
+    # stdin before reading and hides buffering deadlocks in real MCP clients.
+    with runner.start_stdio(project_path, label) as bridge:
+        bridge.exchange(initialize)
+        bridge.send(initialized)
+        for item in requests:
+            bridge.exchange(item)
+        result = bridge.finish()
     return parse_jsonrpc_responses(result, expected_ids, label, request_descriptions)
 
 
