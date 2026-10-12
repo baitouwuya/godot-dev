@@ -35,7 +35,9 @@
 #include "core/mcp/mcp_record_io.h"
 #include "core/os/os.h"
 
-#ifdef UNIX_ENABLED
+#ifdef WINDOWS_ENABLED
+#include <windows.h>
+#elif defined(UNIX_ENABLED)
 #include <cerrno>
 #include <climits>
 #include <signal.h>
@@ -59,7 +61,20 @@ bool MCPOSProjectLeaseProcessProbe::is_process_running(ProcessID p_pid) const {
 	if (p_pid <= 0) {
 		return false;
 	}
-#ifdef UNIX_ENABLED
+#ifdef WINDOWS_ENABLED
+	if ((uint64_t)p_pid > MAXDWORD) {
+		return false;
+	}
+	HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)p_pid);
+	if (!process) {
+		// Access denied is not evidence that an elevated editor has exited.
+		return GetLastError() != ERROR_INVALID_PARAMETER;
+	}
+	DWORD exit_code = 0;
+	const bool running = !GetExitCodeProcess(process, &exit_code) || exit_code == STILL_ACTIVE;
+	CloseHandle(process);
+	return running;
+#elif defined(UNIX_ENABLED)
 	// OS_Unix::is_process_running uses waitpid and only knows child processes.
 	// An editor discovered by another independently started client is not its
 	// child. Signal 0 checks existence without sending a signal or reaping it.
