@@ -34,6 +34,7 @@ TEST_FORCE_LINK(test_mcp_project_lease);
 
 #include "core/io/dir_access.h"
 #include "core/mcp/mcp_project_lease.h"
+#include "core/mcp/mcp_record_io.h"
 #include "core/os/os.h"
 
 namespace TestMCPProjectLease {
@@ -79,11 +80,14 @@ public:
 
 void seed_owner(const String &p_state_directory, const MCPDiscoveryRecord &p_owner) {
 	const String lock_directory = p_state_directory.path_join("mcp.lock");
-	const Error state_directory_error = DirAccess::make_dir_recursive_absolute(p_state_directory);
-	const bool state_directory_ready = state_directory_error == OK || DirAccess::exists(p_state_directory);
-	REQUIRE(state_directory_ready);
-	REQUIRE(DirAccess::make_dir_absolute(lock_directory) == OK);
-	REQUIRE(MCPDiscovery::write_record_file(lock_directory.path_join("owner.json"), p_owner) == OK);
+	// Match production ownership: default Windows directory creation may assign
+	// a group owner, which private record storage deliberately does not trust.
+	REQUIRE(MCPRecordIO::ensure_private_directory(p_state_directory) == OK);
+	REQUIRE(MCPRecordIO::make_private_directory(lock_directory) == OK);
+	String diagnostic;
+	const Error write_error = MCPDiscovery::write_record_file(lock_directory.path_join("owner.json"), p_owner, false, &diagnostic);
+	INFO(diagnostic);
+	REQUIRE(write_error == OK);
 }
 
 TEST_CASE("[MCP][ProjectLease] Atomic directory acquisition exposes the current owner") {
