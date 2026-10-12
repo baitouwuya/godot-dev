@@ -85,6 +85,28 @@ Common stderr diagnostic codes distinguish the next action:
 
 When diagnosing process churn, compare the public discovery `pid` and `instanceId` across tool calls. The editor Host, stdio bridge, Windows console wrapper and running game are different processes; short-lived bridge or game processes do not by themselves mean that the editor restarted.
 
+## Ordinary Request Trace Policy
+
+Ordinary MCP request/tool tracing is disabled by default. Set `GODOT_MCP_TRACE=1` **before launching the editor Host** to opt in; unset, `0`, `off`, and other values keep it disabled. Setting it only on a bridge connecting to an existing Host does not enable tracing. No Harness job is required:
+
+```bash
+GODOT_MCP_TRACE=1 godot --editor --path /absolute/project --mcp
+```
+
+On PowerShell, set `$env:GODOT_MCP_TRACE = "1"` before the Host command. An optional absolute `GODOT_MCP_TRACE_DIR` selects the trace root; otherwise it is `godot/mcp_traces` beneath the OS cache directory (or the OS temporary directory if no cache path is available). Each Host writes `trace-*/manifest.json` and `events-*.jsonl`. `MCP_TRACE_ENABLED` on stderr confirms activation with a generated trace ID. `MCP_TRACE_FAILED` reports a trace-storage failure; tracing stops without failing MCP requests. Diagnostics never enter the stdio bridge's JSON-RPC stdout.
+
+Ordinary records contain only metadata: allowlisted protocol methods/registered tool names, generated span IDs with `parentId`/`rootId`, a 16-hex-character session hash, timestamps, and started/finished markers. Finished records add `durationUsec`, numeric `status`, `isError`, and an `outcome` of `success`, `business_error`, `protocol_error`, or `notification`. Unknown method/tool names become `unknown`. Business failures remain distinguishable even when the JSON-RPC request succeeds. Request IDs, arguments, results, text content, error messages, client metadata, raw session IDs, bearer credentials, and project paths/names are excluded. Manifest metadata is limited to hashed project/instance identifiers and process identity. Explicit Harness job evidence is separate from this ordinary metadata-only policy; starting a Harness trace does not opt ordinary requests into tracing. When ordinary tracing is disabled, Harness-only traces preserve their existing sanitized metadata/evidence policy and event-file retention behavior.
+
+One Host trace spans multiple MCP sessions and survives bridge EOF. Records are flushed as they are written; graceful Host shutdown finalizes `endedAtUtc`. An interrupted request can leave a `started` record without its matching `finished` record, and abrupt termination can leave `endedAtUtc` empty. This is diagnostic evidence, not a replay or recovery log. An ordinary-enabled Host trace, including any Harness events sharing it, retains at most four 8 MiB event files, discarding the oldest files; startup cleanup retains at most 30 trace directories and removes traces older than 14 days. Rotation can remove part of a span's history.
+
+Run the isolated, real-Host regression without a Harness job:
+
+```bash
+python3 tests/editor/mcp/test_mcp_trace_smoke.py --binary <editor-binary>
+```
+
+It checks opt-out, successful and failed ordinary calls, protocol errors, nested correlation across two stdio sessions, payload/privacy exclusions, JSON-only stdout, and graceful shutdown. Unit tests additionally cover bounded rotation and start-before-finish visibility; this smoke test does not simulate a process crash.
+
 ## Search Class Documentation
 
 `godot.class.search` combines the editor documentation index with `ScriptServer`'s global project-class catalog. Native engine classes, extension classes, built-in Variant types, documented project scripts, and undocumented `class_name` scripts therefore remain discoverable. It supports fuzzy class-name matching, native/script source filtering, inheritance filtering, deprecated-class inclusion, and bounded result counts.
