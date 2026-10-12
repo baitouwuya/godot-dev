@@ -239,6 +239,9 @@ Error MCPCLI::_resolve_ready_host(const String &p_project_path, MCPProjectIdenti
 			if (health_error == OK) {
 				return OK;
 			}
+			if (health_error == ERR_INVALID_DATA) {
+				return health_error;
+			}
 			// Never turn a failed live/stale endpoint into permission to launch.
 			// Only a verified absent owner below can permit one explicit start.
 			error = health_error;
@@ -300,7 +303,13 @@ Error MCPCLI::_resolve_ready_host(const String &p_project_path, MCPProjectIdenti
 			}
 		} else if (!launched && !observed_starting) {
 			r_error = "HOST_NOT_RUNNING: No reachable MCP editor was found. Connect-only mode never starts an editor; use --allow-start only when starting one is intended.";
-			return ERR_DOES_NOT_EXIST;
+			if (options.startup_wait_ms == 0) {
+				return ERR_DOES_NOT_EXIST;
+			}
+			// An explicitly started editor may not have reached its early
+			// registration yet. Wait without claiming that no editor exists.
+		} else {
+			r_error = "HOST_STARTING: The selected startup has not published a reachable Host. No additional editor will be launched.";
 		}
 		if (launched && !launcher->is_running(launched_pid)) {
 			r_error = vformat("LAUNCH_EXITED: Editor PID %d exited before becoming ready. Start it explicitly to inspect startup errors; no automatic relaunch was attempted.", launched_pid);

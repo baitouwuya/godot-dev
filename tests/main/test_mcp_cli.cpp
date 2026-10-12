@@ -501,6 +501,7 @@ TEST_CASE("[MCP][CLI] Missing and invalid discovery records only report diagnost
 		QueueCLITransport transport;
 		MCPCLI::Options options;
 		options.discovery_directory = discovery_directory;
+		options.startup_wait_ms = 0;
 		MCPCLI cli(options, &transport, &io);
 		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
 		CHECK(io.stdout_lines.is_empty());
@@ -514,6 +515,7 @@ TEST_CASE("[MCP][CLI] Missing and invalid discovery records only report diagnost
 		QueueCLITransport transport;
 		MCPCLI::Options options;
 		options.discovery_directory = discovery_directory;
+		options.startup_wait_ms = 0;
 		MCPCLI cli(options, &transport, &io);
 		CHECK(cli.run_stdio_bridge(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
 		CHECK(io.stdout_lines.is_empty());
@@ -529,6 +531,7 @@ TEST_CASE("[MCP][CLI] Missing and invalid discovery records only report diagnost
 		QueueCLITransport transport;
 		MCPCLI::Options options;
 		options.discovery_directory = discovery_directory;
+		options.startup_wait_ms = 0;
 		MCPCLI cli(options, &transport, &io);
 		CHECK(cli.run_discover(project_path) == MCPCLI::EXIT_DISCOVERY_FAILED);
 		CHECK(io.stdout_lines.is_empty());
