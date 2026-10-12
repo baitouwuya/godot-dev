@@ -43,6 +43,7 @@
 #include "editor/mcp/providers/mcp_resource_provider.h"
 #include "editor/mcp/providers/mcp_variant_codec.h"
 #include "scene/resources/gradient.h"
+#include "scene/resources/texture.h"
 #include "tests/test_macros.h"
 
 TEST_FORCE_LINK(test_mcp_resource_provider);
