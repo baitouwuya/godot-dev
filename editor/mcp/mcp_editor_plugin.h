@@ -34,7 +34,6 @@
 #include "core/mcp/mcp_project_instance.h"
 #include "editor/mcp/mcp_builtin_features.h"
 #include "editor/mcp/mcp_host.h"
-#include "editor/mcp/mcp_http_health_probe.h"
 #include "editor/mcp/mcp_project_heartbeat.h"
 #include "editor/plugins/editor_plugin.h"
 

@@ -33,9 +33,10 @@
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
 #include "core/mcp/mcp_project_identity.h"
-#include "core/templates/vector.h"
 
 #ifdef WINDOWS_ENABLED
+#include "core/templates/vector.h"
+
 #include <windows.h>
 
 #include <aclapi.h>

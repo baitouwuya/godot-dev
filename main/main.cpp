@@ -128,6 +128,7 @@
 #ifdef MCP_ENABLED
 #include "core/mcp/mcp_project_instance.h"
 #include "editor/mcp/mcp_editor_plugin.h"
+#include "editor/mcp/mcp_http_health_probe.h"
 #endif
 #include "editor/project_manager/project_manager.h"
 #include "editor/register_editor_types.h"

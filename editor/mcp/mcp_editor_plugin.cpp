@@ -30,13 +30,10 @@
 
 #include "mcp_editor_plugin.h"
 
-#include "core/config/project_settings.h"
-#include "core/object/callable_mp.h"
 #include "core/os/os.h"
 #include "core/version.h"
 #include "editor/editor_node.h"
 #include "editor/file_system/editor_paths.h"
-#include "scene/gui/dialogs.h"
 #include "scene/main/scene_tree.h"
 #include "servers/display/display_server.h"
 

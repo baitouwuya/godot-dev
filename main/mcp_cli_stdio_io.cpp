@@ -30,7 +30,11 @@
 
 #include "mcp_cli_stdio_io.h"
 
+#include "core/variant/variant.h"
+
+#ifndef UNIX_ENABLED
 #include "core/os/os.h"
+#endif
 
 #include <cstdio>
 

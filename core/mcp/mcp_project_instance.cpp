@@ -31,9 +31,7 @@
 #include "mcp_project_instance.h"
 
 #include "core/io/dir_access.h"
-#include "core/io/file_access.h"
 #include "core/mcp/mcp_protocol.h"
-#include "core/os/os.h"
 
 namespace {
 void set_error(String *r_error, const String &p_error) {

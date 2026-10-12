@@ -33,7 +33,6 @@
 #include "core/mcp/mcp_discovery.h"
 #include "core/mcp/mcp_project_lease.h"
 #include "core/variant/dictionary.h"
-#include "core/variant/typed_array.h"
 #include "main/mcp_cli_command_registry.h"
 #include "main/mcp_cli_editor_launcher.h"
 #include "main/mcp_cli_http_transport.h"

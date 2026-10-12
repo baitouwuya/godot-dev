@@ -30,9 +30,9 @@
 
 #include "mcp_cli_http_transport.h"
 
+#include "core/crypto/crypto.h"
 #include "core/io/http_client.h"
 #include "core/io/json.h"
-#include "core/io/stream_peer_tls.h"
 #include "core/os/os.h"
 
 namespace {

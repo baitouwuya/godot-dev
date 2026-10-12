@@ -34,7 +34,7 @@
 #include "core/mcp/mcp_discovery.h"
 #include "core/templates/vector.h"
 #include "core/variant/dictionary.h"
-#include "core/variant/typed_array.h"
+#include "core/variant/variant.h"
 
 struct MCPCLIHTTPResponse {
 	int status_code = 0;

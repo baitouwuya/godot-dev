@@ -36,7 +36,6 @@
 #include "core/io/resource_loader.h"
 #include "core/io/resource_saver.h"
 #include "core/mcp/mcp_tool_registry.h"
-#include "core/object/script_language.h"
 #include "core/os/os.h"
 #include "editor/file_system/editor_file_system.h"
 #include "editor/import/resource_importer_csv_translation.h"
@@ -45,7 +44,7 @@
 #include "editor/mcp/providers/mcp_variant_codec.h"
 #include "scene/resources/gradient.h"
 #include "scene/resources/packed_scene.h"
-#include "scene/resources/texture.h"
+#include "scene/resources/texture.h" // IWYU pragma: keep. Required for EditorResourcePreview's Ref<Texture2D> members.
 #include "tests/test_macros.h"
 
 #include "modules/modules_enabled.gen.h"
