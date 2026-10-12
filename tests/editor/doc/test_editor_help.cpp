@@ -66,11 +66,12 @@ struct EditorHelpTestAccess {
 		static_cast<Callable *>(p_userdata)->call_deferred();
 	}
 
-	static void start_worker(Callable &p_callback) {
+	static bool start_worker(Callable &p_callback) {
 #ifdef THREADS_ENABLED
-		EditorHelp::worker_thread.start(queue_from_worker, &p_callback);
+		return EditorHelp::worker_thread.start(queue_from_worker, &p_callback) != Thread::UNASSIGNED_ID;
 #else
 		queue_from_worker(&p_callback);
+		return true;
 #endif
 	}
 
@@ -140,7 +141,7 @@ TEST_CASE("[EditorHelp] Deferred documentation callbacks cannot restart work aft
 	REQUIRE(callback.is_valid());
 	// Queue from a worker, then join it through the actual shutdown path, without
 	// flushing the main queue until the documentation has been deleted.
-	EditorHelpTestAccess::start_worker(callback);
+	REQUIRE(EditorHelpTestAccess::start_worker(callback));
 	EditorHelp::cleanup_doc();
 	CHECK(EditorHelpTestAccess::get_doc() == nullptr);
 	CHECK_FALSE(EditorHelpTestAccess::has_threads());
