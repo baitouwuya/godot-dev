@@ -3241,7 +3241,7 @@ error:
 #endif
 
 	if (editor) {
-#ifdef MCP_ENABLED
+#if defined(TOOLS_ENABLED) && defined(MCP_ENABLED)
 		if (!mcp_editor_start_rejected) {
 			OS::get_singleton()->remove_lock_file();
 		}
