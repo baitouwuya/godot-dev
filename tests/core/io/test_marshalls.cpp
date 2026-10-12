@@ -33,6 +33,7 @@
 TEST_FORCE_LINK(test_marshalls)
 
 #include "core/io/marshalls.h"
+#include "core/io/resource.h"
 #include "core/object/script_language.h"
 
 namespace TestMarshalls {
@@ -488,6 +489,132 @@ TEST_CASE("[Marshalls] Typed dictionary decoding") {
 	CHECK(dictionary.size() == 1);
 	CHECK(dictionary.has(Variant(uint64_t(0x0f123456789abcdef))));
 	CHECK(dictionary[Variant(uint64_t(0x0f123456789abcdef))] == Variant(uint64_t(0x0f123456789abcdef)));
+}
+
+static void check_bounded_encoding(const Variant &p_value, bool p_full_objects = false) {
+	int size = 0;
+	REQUIRE(encode_variant(p_value, nullptr, size, p_full_objects) == OK);
+	Vector<uint8_t> expected;
+	expected.resize(size);
+	REQUIRE(encode_variant(p_value, expected.ptrw(), size, p_full_objects) == OK);
+
+	int measured = -1;
+	CHECK(encode_variant_bounded(p_value, nullptr, measured, size, p_full_objects) == OK);
+	CHECK(measured == size);
+	Vector<uint8_t> actual;
+	actual.resize(size);
+	int written = -1;
+	CHECK(encode_variant_bounded(p_value, actual.ptrw(), written, size, p_full_objects) == OK);
+	CHECK(written == size);
+	CHECK(actual == expected);
+
+	// Try every short capacity, so type headers, count/type metadata, scalar
+	// fields, strings and padding all have their own boundary exercised.
+	Vector<uint8_t> guarded;
+	guarded.resize(size + 8);
+	for (int limit = 0; limit < size; limit++) {
+		CAPTURE(p_value.get_type());
+		CAPTURE(limit);
+		guarded.fill(0xa5);
+		CHECK(encode_variant_bounded(p_value, nullptr, measured, limit, p_full_objects) == ERR_OUT_OF_MEMORY);
+		CHECK(encode_variant_bounded(p_value, guarded.ptrw(), written, limit, p_full_objects) == ERR_OUT_OF_MEMORY);
+		for (int i = limit; i < guarded.size(); i++) {
+			REQUIRE(guarded[i] == 0xa5);
+		}
+	}
+}
+
+TEST_CASE("[Marshalls] Bounded variant encoding preserves wire bytes and every write boundary") {
+	for (int type = Variant::NIL; type < Variant::VARIANT_MAX; type++) {
+		Variant value;
+		Callable::CallError error;
+		Variant::construct(Variant::Type(type), value, nullptr, 0, error);
+		REQUIRE(error.error == Callable::CallError::CALL_OK);
+		check_bounded_encoding(value);
+	}
+	check_bounded_encoding(int64_t(1) << 48);
+	check_bounded_encoding(1.1);
+	check_bounded_encoding(String::utf8("aé雪🐟"));
+	check_bounded_encoding(StringName("name"));
+	check_bounded_encoding(NodePath("/root/child:property"));
+	check_bounded_encoding(Vector<uint8_t>({ 1, 2, 3 }));
+	check_bounded_encoding(Vector<int32_t>({ 1, -2 }));
+	check_bounded_encoding(Vector<int64_t>({ 1, int64_t(1) << 48 }));
+	check_bounded_encoding(Vector<float>({ 1.5, -2.5 }));
+	check_bounded_encoding(Vector<double>({ 1.1, -2.1 }));
+	check_bounded_encoding(Vector<String>({ "", "a", "ab", "abc", "abcd", String::utf8("雪") }));
+	check_bounded_encoding(Vector<Vector2>({ Vector2(1, 2) }));
+	check_bounded_encoding(Vector<Vector3>({ Vector3(1, 2, 3) }));
+	check_bounded_encoding(Vector<Color>({ Color(0.1, 0.2, 0.3, 0.4) }));
+	check_bounded_encoding(Vector<Vector4>({ Vector4(1, 2, 3, 4) }));
+
+	Array numbers;
+	numbers.set_typed(Variant::INT, StringName(), Variant());
+	numbers.push_back(42);
+	Dictionary dictionary;
+	dictionary.set_typed(Variant::STRING, StringName(), Variant(), Variant::ARRAY, StringName(), Variant());
+	dictionary["typed"] = numbers;
+	Array nested;
+	nested.push_back(dictionary);
+	nested.push_back(numbers);
+	check_bounded_encoding(nested);
+
+	Ref<Resource> resource;
+	resource.instantiate();
+	resource->set_name("encoded resource");
+	check_bounded_encoding(resource);
+	check_bounded_encoding(resource, true);
+	Array objects;
+	objects.set_typed(Variant::OBJECT, Resource::get_class_static(), Variant());
+	objects.push_back(resource);
+	check_bounded_encoding(objects);
+	check_bounded_encoding(objects, true);
+}
+
+TEST_CASE("[Marshalls] Bounded encoding stops expanding shared container graphs") {
+	Array graph;
+	graph.push_back(42);
+	// Only 40 Arrays in memory, but their unfolded encoding exceeds INT_MAX.
+	for (int i = 0; i < 40; i++) {
+		Array parent;
+		parent.push_back(graph);
+		parent.push_back(graph);
+		graph = parent;
+	}
+	int size = 0;
+	CHECK(encode_variant_bounded(graph, nullptr, size, 1024) == ERR_OUT_OF_MEMORY);
+	uint8_t buffer[1032];
+	memset(buffer, 0xa5, sizeof(buffer));
+	CHECK(encode_variant_bounded(graph, buffer, size, 1024) == ERR_OUT_OF_MEMORY);
+	for (int i = 1024; i < 1032; i++) {
+		CHECK(buffer[i] == 0xa5);
+	}
+}
+
+class NonInstantiableObject : public RefCounted {
+	GDCLASS(NonInstantiableObject, RefCounted);
+
+protected:
+	static void _bind_methods() {}
+};
+
+TEST_CASE("[Marshalls] Bounded encoding propagates recursion and full-object errors") {
+	Array cycle;
+	cycle.push_back(cycle);
+	int size = 0;
+	ERR_PRINT_OFF;
+	const Error recursion_error = encode_variant_bounded(cycle, nullptr, size, 1 << 20);
+	ERR_PRINT_ON;
+	cycle.clear();
+	CHECK(recursion_error == ERR_OUT_OF_MEMORY);
+
+	Ref<NonInstantiableObject> object;
+	object.instantiate();
+	ERR_PRINT_OFF;
+	const Error object_error = encode_variant_bounded(object, nullptr, size, 4096, true);
+	ERR_PRINT_ON;
+	CHECK(object_error == ERR_INVALID_PARAMETER);
+	CHECK(encode_variant_bounded(object, nullptr, size, 4096) == OK);
 }
 
 } // namespace TestMarshalls

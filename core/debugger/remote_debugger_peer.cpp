@@ -38,10 +38,11 @@
 #include "core/os/os.h"
 
 bool RemoteDebuggerPeerTCP::is_peer_connected() {
-	return connected;
+	return connected.is_set();
 }
 
 bool RemoteDebuggerPeerTCP::has_message() {
+	MutexLock lock(mutex);
 	return in_queue.size() > 0;
 }
 
@@ -57,11 +58,36 @@ Array RemoteDebuggerPeerTCP::get_message() {
 
 Error RemoteDebuggerPeerTCP::put_message(const Array &p_arr) {
 	MutexLock lock(mutex);
-	if (out_queue.size() >= max_queued_messages) {
+	if (!connected.is_set()) {
+		return ERR_UNCONFIGURED;
+	}
+	if (out_queue.size() >= max_queued_messages || out_queued_bytes >= MAX_QUEUED_BYTES) {
 		return ERR_OUT_OF_MEMORY;
 	}
 
-	out_queue.push_back(p_arr);
+	// Array/Dictionary copies retain mutable backing storage. Encode while the
+	// producer still owns the message, before it can resume and mutate its data.
+	// Callers must not mutate the payload concurrently with this call.
+	const int max_size = MIN(get_max_message_size(), MAX_QUEUED_BYTES - out_queued_bytes) - 4;
+	int size = 0;
+	Error err = encode_variant_bounded(p_arr, nullptr, size, max_size);
+	if (err != OK) {
+		return err;
+	}
+	Vector<uint8_t> packet;
+	err = packet.resize(size + 4);
+	if (err != OK) {
+		return err;
+	}
+	int written = 0;
+	err = encode_variant_bounded(p_arr, packet.ptrw() + 4, written, size);
+	if (err != OK) {
+		return err;
+	}
+	ERR_FAIL_COND_V(written != size, ERR_INVALID_DATA);
+	encode_uint32(written, packet.ptrw());
+	out_queued_bytes += packet.size();
+	out_queue.push_back(packet);
 	return OK;
 }
 
@@ -70,27 +96,37 @@ int RemoteDebuggerPeerTCP::get_max_message_size() const {
 }
 
 void RemoteDebuggerPeerTCP::close() {
-	running = false;
+	{
+		MutexLock lock(mutex);
+		connected.clear();
+		running.clear();
+	}
 	if (thread.is_started()) {
 		thread.wait_to_finish();
 	}
-	tcp_client->disconnect_from_host();
+	MutexLock lock(mutex);
+	if (tcp_client.is_valid()) {
+		tcp_client->disconnect_from_host();
+	}
+	out_queue.clear();
+	out_queued_bytes = 0;
+	out_left = 0;
+	out_pos = 0;
 	out_buf.clear();
+	in_queue.clear();
 	in_buf.clear();
 }
 
 RemoteDebuggerPeerTCP::RemoteDebuggerPeerTCP() {
-	// This means remote debugger takes 16 MiB just because it exists...
-	in_buf.resize((8 << 20) + 4); // 8 MiB should be way more than enough (need 4 extra bytes for encoding packet size).
-	out_buf.resize(8 << 20); // 8 MiB should be way more than enough
+	in_buf.resize((8 << 20) + 4); // Need 4 extra bytes for encoding packet size.
 }
 
 RemoteDebuggerPeerTCP::RemoteDebuggerPeerTCP(Ref<StreamPeerSocket> p_stream) :
 		RemoteDebuggerPeerTCP() {
 	DEV_ASSERT(p_stream.is_valid());
 	tcp_client = p_stream;
-	connected = true;
-	running = true;
+	connected.set();
+	running.set();
 	thread.start(_thread_func, this);
 }
 
@@ -99,40 +135,47 @@ RemoteDebuggerPeerTCP::~RemoteDebuggerPeerTCP() {
 }
 
 void RemoteDebuggerPeerTCP::_write_out() {
-	while (tcp_client->get_status() == StreamPeerTCP::STATUS_CONNECTED && tcp_client->wait(NetSocket::POLL_TYPE_OUT) == OK) {
-		uint8_t *buf = out_buf.ptrw();
+	while (running.is_set() && tcp_client->get_status() == StreamPeerTCP::STATUS_CONNECTED && tcp_client->wait(NetSocket::POLL_TYPE_OUT) == OK) {
 		if (out_left <= 0) {
-			mutex.lock();
-			List<Array>::Element *E = out_queue.front();
+			MutexLock lock(mutex);
+			List<Vector<uint8_t>>::Element *E = out_queue.front();
 			if (!E) {
-				mutex.unlock();
 				break;
 			}
-			Variant var = E->get();
+			out_buf = E->get();
 			out_queue.pop_front();
-			mutex.unlock();
-			int size = 0;
-			Error err = encode_variant(var, nullptr, size);
-			ERR_CONTINUE(err != OK || size > out_buf.size() - 4); // 4 bytes separator.
-			encode_uint32(size, buf);
-			encode_variant(var, buf + 4, size);
-			out_left = size + 4;
+			out_left = out_buf.size();
 			out_pos = 0;
 		}
 		int sent = 0;
-		tcp_client->put_partial_data(buf + out_pos, out_left, sent);
+		Error err = tcp_client->put_partial_data(out_buf.ptr() + out_pos, out_left, sent);
+		if (err != OK) {
+			_disconnect_with_error("Remote debugger: Connection lost while writing packet.");
+			return;
+		}
+		if (sent == 0) {
+			break; // Wait until the socket can make progress, instead of spinning.
+		}
 		out_left -= sent;
 		out_pos += sent;
+		if (out_left == 0) {
+			MutexLock lock(mutex);
+			out_queued_bytes -= out_buf.size();
+			out_buf.clear();
+		}
 	}
 }
 
 void RemoteDebuggerPeerTCP::_read_in() {
-	while (tcp_client->get_status() == StreamPeerTCP::STATUS_CONNECTED && tcp_client->wait(NetSocket::POLL_TYPE_IN) == OK) {
+	while (running.is_set() && tcp_client->get_status() == StreamPeerTCP::STATUS_CONNECTED && tcp_client->wait(NetSocket::POLL_TYPE_IN) == OK) {
 		uint8_t *buf = in_buf.ptrw();
 		Error err = OK;
 		if (in_left <= 0) {
-			if (in_queue.size() > max_queued_messages) {
-				break; // Too many messages already in queue.
+			{
+				MutexLock lock(mutex);
+				if (in_queue.size() > max_queued_messages) {
+					break; // Too many messages already in queue.
+				}
 			}
 			if (tcp_client->get_available_bytes() < 4) {
 				break; // Need 4 more bytes.
@@ -197,7 +240,7 @@ void RemoteDebuggerPeerTCP::_thread_func(void *p_ud) {
 	// Update in time for 144hz monitors
 	const uint64_t min_tick = 6900;
 	RemoteDebuggerPeerTCP *peer = static_cast<RemoteDebuggerPeerTCP *>(p_ud);
-	while (peer->running && peer->is_peer_connected()) {
+	while (peer->running.is_set() && peer->is_peer_connected()) {
 		uint64_t ticks_usec = OS::get_singleton()->get_ticks_usec();
 		peer->_poll();
 		if (!peer->is_peer_connected()) {
@@ -216,10 +259,17 @@ void RemoteDebuggerPeerTCP::poll() {
 
 void RemoteDebuggerPeerTCP::_poll() {
 	tcp_client->poll();
-	if (connected) {
+	if (connected.is_set()) {
 		_write_out();
 		_read_in();
-		connected = tcp_client->get_status() == StreamPeerTCP::STATUS_CONNECTED;
+		if (tcp_client->get_status() != StreamPeerTCP::STATUS_CONNECTED) {
+			MutexLock lock(mutex);
+			connected.clear();
+			out_queue.clear();
+			out_queued_bytes = 0;
+			out_left = 0;
+			out_buf.clear();
+		}
 	}
 }
 

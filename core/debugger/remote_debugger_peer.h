@@ -34,6 +34,7 @@
 #include "core/os/mutex.h"
 #include "core/os/thread.h"
 #include "core/string/ustring.h"
+#include "core/templates/safe_refcount.h"
 
 class StreamPeerSocket;
 
@@ -64,15 +65,19 @@ private:
 	Mutex mutex;
 	Thread thread;
 	List<Array> in_queue;
-	List<Array> out_queue;
+	// Only owned wire packets cross the producer/worker boundary.
+	List<Vector<uint8_t>> out_queue;
+	// Includes the packet currently being written, until its last byte is sent.
+	static constexpr int MAX_QUEUED_BYTES = 32 << 20;
+	int out_queued_bytes = 0;
 	int out_left = 0;
 	int out_pos = 0;
 	Vector<uint8_t> out_buf;
 	int in_left = 0;
 	int in_pos = 0;
 	Vector<uint8_t> in_buf;
-	bool connected = false;
-	bool running = false;
+	SafeFlag connected;
+	SafeFlag running;
 
 	static void _thread_func(void *p_ud);
 

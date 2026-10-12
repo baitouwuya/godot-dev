@@ -48,11 +48,15 @@ class GatedSocket : public NetSocket {
 
 	SafeFlag opened = SafeFlag(true);
 	SafeFlag writes_enabled;
+	SafeFlag fail_writes;
+	SafeNumeric<int> send_allowance = SafeNumeric<int>(INT_MAX);
 	Mutex mutex;
 	Vector<uint8_t> received;
 
 public:
 	void enable_writes() { writes_enabled.set(); }
+	void fail_next_write() { fail_writes.set(); }
+	void set_send_allowance(int p_bytes) { send_allowance.set(p_bytes); }
 	Vector<uint8_t> get_received() {
 		MutexLock lock(mutex);
 		return received;
@@ -67,7 +71,7 @@ public:
 		if (!opened.is_set()) {
 			return ERR_CONNECTION_ERROR;
 		}
-		if (p_type == POLL_TYPE_IN || (p_type == POLL_TYPE_OUT && !writes_enabled.is_set())) {
+		if (p_type == POLL_TYPE_IN || (p_type == POLL_TYPE_OUT && (!writes_enabled.is_set() || send_allowance.get() == 0))) {
 			return ERR_BUSY;
 		}
 		return OK;
@@ -78,11 +82,21 @@ public:
 	}
 	Error recvfrom(uint8_t *p_buffer, int p_len, int &r_read, IPAddress &r_ip, uint16_t &r_port, bool p_peek) override { return ERR_UNAVAILABLE; }
 	Error send(const uint8_t *p_buffer, int p_len, int &r_sent) override {
+		r_sent = 0;
+		if (fail_writes.is_set()) {
+			return ERR_CONNECTION_ERROR;
+		}
 		MutexLock lock(mutex);
+		r_sent = MIN(p_len, send_allowance.get());
+		if (r_sent == 0) {
+			return ERR_BUSY;
+		}
 		int offset = received.size();
-		received.resize(offset + p_len);
-		memcpy(received.ptrw() + offset, p_buffer, p_len);
-		r_sent = p_len;
+		received.resize(offset + r_sent);
+		memcpy(received.ptrw() + offset, p_buffer, r_sent);
+		if (send_allowance.get() != INT_MAX) {
+			send_allowance.sub(r_sent);
+		}
 		return OK;
 	}
 	Error sendto(const uint8_t *p_buffer, int p_len, int &r_sent, IPAddress p_ip, uint16_t p_port) override { return ERR_UNAVAILABLE; }
@@ -115,7 +129,7 @@ public:
 	Ref<TestStream> stream;
 	Ref<RemoteDebuggerPeerTCP> peer;
 
-	PeerFixture() {
+	PeerFixture(int p_max_messages = 4096) {
 		socket.instantiate();
 		stream.instantiate();
 		stream->accept_socket(socket, NetSocket::Address());
@@ -124,9 +138,20 @@ public:
 		const String setting = "network/limits/debugger/max_queued_messages";
 		const bool had_setting = settings->has_setting(setting);
 		const Variant previous = had_setting ? settings->get_setting(setting) : Variant();
-		settings->set_setting(setting, 4096);
+		settings->set_setting(setting, p_max_messages);
 		peer = memnew(RemoteDebuggerPeerTCP(stream));
 		settings->set_setting(setting, previous);
+	}
+
+	bool wait_for_bytes(int p_bytes) {
+		const uint64_t deadline = OS::get_singleton()->get_ticks_msec() + 2000;
+		while (OS::get_singleton()->get_ticks_msec() < deadline) {
+			if (socket->get_received().size() >= p_bytes) {
+				return true;
+			}
+			OS::get_singleton()->delay_usec(1000);
+		}
+		return false;
 	}
 
 	Vector<uint8_t> receive_packet() {
@@ -225,6 +250,130 @@ TEST_CASE("[RemoteDebuggerPeer] Oversize messages fail at enqueue") {
 	Array message;
 	message.push_back(payload);
 	CHECK(fixture.peer->put_message(message) == ERR_OUT_OF_MEMORY);
+}
+
+TEST_CASE("[RemoteDebuggerPeer] Repeated nested messages retain their enqueue generations") {
+	PeerFixture fixture;
+	Array values;
+	values.push_back(0);
+	Dictionary state;
+	state["values"] = values;
+	Array message;
+	message.push_back(state);
+	Vector<uint8_t> expected;
+	for (int generation = 0; generation < 128; generation++) {
+		values[0] = generation;
+		expected.append_array(encode_packet(message));
+		REQUIRE(fixture.peer->put_message(message) == OK);
+	}
+	state.clear();
+	values.clear();
+	fixture.socket->enable_writes();
+	REQUIRE(fixture.wait_for_bytes(expected.size()));
+	CHECK(fixture.socket->get_received() == expected);
+}
+
+TEST_CASE("[RemoteDebuggerPeer] Partial writes preserve owned packet bytes") {
+	PeerFixture fixture;
+	Array message;
+	message.push_back("snapshot across partial writes");
+	const Vector<uint8_t> expected = encode_packet(message);
+	fixture.socket->set_send_allowance(3);
+	REQUIRE(fixture.peer->put_message(message) == OK);
+	fixture.socket->enable_writes();
+	REQUIRE(fixture.wait_for_bytes(3));
+	message.clear();
+	CHECK(fixture.socket->get_received().size() == 3);
+	fixture.socket->set_send_allowance(INT_MAX);
+	CHECK(fixture.receive_packet() == expected);
+}
+
+TEST_CASE("[RemoteDebuggerPeer] Exact frame limit and aggregate byte budget include in-flight bytes") {
+	PeerFixture fixture;
+	const int frame_size = fixture.peer->get_max_message_size();
+	Vector<uint8_t> payload;
+	// Array and PackedByteArray headers plus the transport prefix occupy 20 bytes.
+	payload.resize(frame_size - 20);
+	Array message;
+	message.push_back(payload);
+	for (int i = 0; i < 4; i++) {
+		REQUIRE(fixture.peer->put_message(message) == OK);
+	}
+	CHECK(fixture.peer->put_message(message) == ERR_OUT_OF_MEMORY);
+	fixture.socket->set_send_allowance(frame_size - 1);
+	fixture.socket->enable_writes();
+	REQUIRE(fixture.wait_for_bytes(frame_size - 1));
+	// Dequeuing and partly writing the first packet must not release its budget.
+	CHECK(fixture.peer->put_message(message) == ERR_OUT_OF_MEMORY);
+	fixture.socket->set_send_allowance(1);
+	REQUIRE(fixture.wait_for_bytes(frame_size));
+	// The socket signals receipt just before the worker releases the byte budget.
+	const uint64_t deadline = OS::get_singleton()->get_ticks_msec() + 2000;
+	Error error = ERR_OUT_OF_MEMORY;
+	while (error == ERR_OUT_OF_MEMORY && OS::get_singleton()->get_ticks_msec() < deadline) {
+		error = fixture.peer->put_message(message);
+		OS::get_singleton()->delay_usec(1000);
+	}
+	CHECK(error == OK);
+	fixture.peer->close();
+	CHECK_FALSE(fixture.peer->is_peer_connected());
+	CHECK(fixture.peer->put_message(message) == ERR_UNCONFIGURED);
+}
+
+TEST_CASE("[RemoteDebuggerPeer] Message count limit is retained") {
+	PeerFixture fixture(2);
+	Array message;
+	message.push_back(42);
+	CHECK(fixture.peer->put_message(message) == OK);
+	CHECK(fixture.peer->put_message(message) == OK);
+	CHECK(fixture.peer->put_message(message) == ERR_OUT_OF_MEMORY);
+}
+
+TEST_CASE("[RemoteDebuggerPeer] Write errors disconnect and discard queued packets") {
+	PeerFixture fixture;
+	Array message;
+	message.push_back("write failure");
+	REQUIRE(fixture.peer->put_message(message) == OK);
+	REQUIRE(fixture.peer->put_message(message) == OK);
+	fixture.socket->fail_next_write();
+	ERR_PRINT_OFF;
+	fixture.socket->enable_writes();
+	const uint64_t deadline = OS::get_singleton()->get_ticks_msec() + 2000;
+	while (fixture.peer->is_peer_connected() && OS::get_singleton()->get_ticks_msec() < deadline) {
+		OS::get_singleton()->delay_usec(1000);
+	}
+	ERR_PRINT_ON;
+	CHECK_FALSE(fixture.peer->is_peer_connected());
+	CHECK(fixture.peer->put_message(message) == ERR_UNCONFIGURED);
+	fixture.peer->close();
+	CHECK(fixture.socket->get_received().is_empty());
+}
+
+TEST_CASE("[RemoteDebuggerPeer] Disconnect and repeated close safely discard queued bytes") {
+	PeerFixture fixture;
+	Array message;
+	message.push_back("queued before disconnect");
+	REQUIRE(fixture.peer->put_message(message) == OK);
+	fixture.socket->close();
+	const uint64_t deadline = OS::get_singleton()->get_ticks_msec() + 2000;
+	while (fixture.peer->is_peer_connected() && OS::get_singleton()->get_ticks_msec() < deadline) {
+		OS::get_singleton()->delay_usec(1000);
+	}
+	CHECK_FALSE(fixture.peer->is_peer_connected());
+	CHECK(fixture.peer->put_message(message) == ERR_UNCONFIGURED);
+	fixture.peer->close();
+	fixture.peer->close();
+	CHECK(fixture.socket->get_received().is_empty());
+
+	ProjectSettings *settings = ProjectSettings::get_singleton();
+	const String setting = "network/limits/debugger/max_queued_messages";
+	const Variant previous = settings->get_setting(setting, Variant());
+	settings->set_setting(setting, 4096);
+	Ref<RemoteDebuggerPeerTCP> unconnected;
+	unconnected.instantiate();
+	settings->set_setting(setting, previous);
+	CHECK(unconnected->put_message(message) == ERR_UNCONFIGURED);
+	unconnected->close();
 }
 
 } // namespace TestRemoteDebuggerPeer
