@@ -51,8 +51,8 @@ TEST_CASE("[MCP][Provider] Tool descriptors register in order and roll back only
 	MCPToolRegistry registry;
 	const Dictionary schema = MCPToolUtils::make_object_schema();
 	const LocalVector<MCPToolUtils::ToolDescriptor> descriptors{
-		{ "test.first", "First tool.", schema, MCPToolUtils::TOOL_READ_ONLY, callable_mp(provider, &DescriptorProvider::echo) },
-		{ "test.second", "Second tool.", schema, MCPToolUtils::TOOL_DESTRUCTIVE, callable_mp(provider, &DescriptorProvider::echo) }
+		{ "test.first", "First tool.", schema, MCPToolUtils::TOOL_READ_ONLY, callable_mp(provider, &DescriptorProvider::echo), Dictionary() },
+		{ "test.second", "Second tool.", schema, MCPToolUtils::TOOL_DESTRUCTIVE, callable_mp(provider, &DescriptorProvider::echo), Dictionary() }
 	};
 	REQUIRE(MCPToolUtils::register_tools(&registry, provider, descriptors) == OK);
 	CHECK(registry.get_tool_names() == PackedStringArray{ "test.first", "test.second" });
@@ -62,8 +62,8 @@ TEST_CASE("[MCP][Provider] Tool descriptors register in order and roll back only
 					descriptors[0].handler, provider) == OK);
 
 	const LocalVector<MCPToolUtils::ToolDescriptor> duplicate_batch{
-		{ "test.duplicate", "First duplicate.", schema, MCPToolUtils::TOOL_READ_ONLY, callable_mp(provider, &DescriptorProvider::echo) },
-		{ "test.duplicate", "Second duplicate.", schema, MCPToolUtils::TOOL_READ_ONLY, callable_mp(provider, &DescriptorProvider::echo) }
+		{ "test.duplicate", "First duplicate.", schema, MCPToolUtils::TOOL_READ_ONLY, callable_mp(provider, &DescriptorProvider::echo), Dictionary() },
+		{ "test.duplicate", "Second duplicate.", schema, MCPToolUtils::TOOL_READ_ONLY, callable_mp(provider, &DescriptorProvider::echo), Dictionary() }
 	};
 	String error;
 	CHECK(MCPToolUtils::register_tools(&registry, provider, duplicate_batch, &error) == ERR_ALREADY_EXISTS);
