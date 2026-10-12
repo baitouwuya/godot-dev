@@ -238,11 +238,11 @@ Error StructuredTraceWriter::_write_manifest(String *r_error) {
 	}
 	categories.sort();
 	manifest["categories"] = categories;
-	Array files;
+	Array manifest_event_files;
 	for (const String &file : event_files) {
-		files.push_back(file);
+		manifest_event_files.push_back(file);
 	}
-	manifest["eventFiles"] = files;
+	manifest["eventFiles"] = manifest_event_files;
 	manifest["payloadDirectory"] = "payloads";
 
 	Error error = OK;
