@@ -1878,9 +1878,9 @@ Error encode_variant_bounded(const Variant &p_variant, uint8_t *r_buffer, int &r
 							continue;
 						}
 
-						Error string_error = _encode_string(E.name, buf, r_len, p_max_size);
-						if (string_error != OK) {
-							return string_error;
+						Error property_name_error = _encode_string(E.name, buf, r_len, p_max_size);
+						if (property_name_error != OK) {
+							return property_name_error;
 						}
 
 						Variant value;
