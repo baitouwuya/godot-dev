@@ -105,30 +105,38 @@ public:
 		attributes.lpSecurityDescriptor = &descriptor;
 		return true;
 	}
-	bool protect_directory(const String &p_path) {
+	bool protect_directory(const String &p_path, DWORD &r_error) {
 		const Char16String path = p_path.utf16();
 		HANDLE directory = CreateFileW(reinterpret_cast<LPCWSTR>(path.get_data()), READ_CONTROL | WRITE_DAC,
 				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
 				FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
 		if (directory == INVALID_HANDLE_VALUE) {
+			r_error = GetLastError();
 			return false;
 		}
 		BY_HANDLE_FILE_INFORMATION info;
-		if (!GetFileInformationByHandle(directory, &info) || !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+		if (!GetFileInformationByHandle(directory, &info)) {
+			r_error = GetLastError();
+			CloseHandle(directory);
+			return false;
+		}
+		if (!(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+			r_error = ERROR_DIRECTORY;
 			CloseHandle(directory);
 			return false;
 		}
 		PSID owner = nullptr;
 		PSECURITY_DESCRIPTOR existing = nullptr;
-		if (GetSecurityInfo(directory, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, &owner, nullptr, nullptr, nullptr, &existing) != ERROR_SUCCESS) {
+		r_error = GetSecurityInfo(directory, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, &owner, nullptr, nullptr, nullptr, &existing);
+		if (r_error != ERROR_SUCCESS) {
 			CloseHandle(directory);
 			return false;
 		}
 		const bool own_directory = EqualSid(owner, reinterpret_cast<TOKEN_USER *>(token_info.ptrw())->User.Sid) != FALSE;
 		LocalFree(existing);
-		const bool secured = own_directory && SetSecurityInfo(directory, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, acl, nullptr) == ERROR_SUCCESS;
+		r_error = own_directory ? SetSecurityInfo(directory, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, acl, nullptr) : ERROR_INVALID_OWNER;
 		CloseHandle(directory);
-		return secured;
+		return r_error == ERROR_SUCCESS;
 	}
 };
 #endif
@@ -203,8 +211,9 @@ Error MCPRecordIO::write_atomic(const String &p_path, const String &p_text, Stri
 	if (create_error != OK && create_error != ERR_ALREADY_EXISTS) {
 		return fail("Cannot create a private MCP record directory.", r_error, create_error);
 	}
-	if (!security.protect_directory(directory)) {
-		return fail("Cannot establish owner-only MCP record permissions.", r_error, ERR_UNAUTHORIZED);
+	DWORD security_error = ERROR_SUCCESS;
+	if (!security.protect_directory(directory, security_error)) {
+		return fail(vformat("Cannot establish owner-only MCP record permissions (Windows error %d).", security_error), r_error, ERR_UNAUTHORIZED);
 	}
 #else
 	const Error directory_error = ensure_private_directory(directory);
@@ -220,23 +229,49 @@ Error MCPRecordIO::write_atomic(const String &p_path, const String &p_text, Stri
 	const CharString bytes = p_text.utf8();
 #ifdef WINDOWS_ENABLED
 	const Char16String temporary = temporary_path.utf16();
-	const Char16String target = p_path.utf16();
-	HANDLE file = CreateFileW(reinterpret_cast<LPCWSTR>(temporary.get_data()), GENERIC_WRITE, 0,
-			&security.attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+	const Char16String target = p_path.replace("/", "\\").utf16();
+	// This handle survives publication until CloseHandle below. Its sharing must
+	// already permit readers and later replacements at the published filename.
+	HANDLE file = CreateFileW(reinterpret_cast<LPCWSTR>(temporary.get_data()), GENERIC_WRITE | DELETE,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &security.attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
 	if (file == INVALID_HANDLE_VALUE) {
 		return fail("Cannot create a private MCP record.", r_error, ERR_CANT_CREATE);
 	}
 	DWORD written = 0;
 	const bool stored = WriteFile(file, bytes.get_data(), DWORD(bytes.length()), &written, nullptr) && written == DWORD(bytes.length()) && FlushFileBuffers(file);
-	CloseHandle(file);
 	if (!stored) {
+		CloseHandle(file);
 		DeleteFileW(reinterpret_cast<LPCWSTR>(temporary.get_data()));
 		return fail("Cannot write MCP record.", r_error, ERR_FILE_CANT_WRITE);
 	}
-	// Unlike DirAccessWindows::rename, this never deletes the destination first.
-	if (!MoveFileExW(reinterpret_cast<LPCWSTR>(temporary.get_data()), reinterpret_cast<LPCWSTR>(target.get_data()), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+	// FILE_SHARE_DELETE alone does not let MoveFileEx replace an open target.
+	// POSIX rename semantics keep existing readers on the old complete record
+	// while new opens see the replacement. Readers denying delete still block it.
+	const uint64_t rename_size = sizeof(FILE_RENAME_INFO) + uint64_t(target.length()) * sizeof(WCHAR);
+	if (rename_size > MAXDWORD) {
+		CloseHandle(file);
 		DeleteFileW(reinterpret_cast<LPCWSTR>(temporary.get_data()));
-		return fail("Cannot atomically replace MCP record; the previous record is intact.", r_error, ERR_BUSY);
+		return fail("MCP record path exceeds the native rename size limit.", r_error, ERR_INVALID_PARAMETER);
+	}
+	Vector<uint8_t> rename_buffer;
+	rename_buffer.resize(rename_size);
+	memset(rename_buffer.ptrw(), 0, rename_buffer.size());
+	FILE_RENAME_INFO *rename_info = reinterpret_cast<FILE_RENAME_INFO *>(rename_buffer.ptrw());
+	rename_info->Flags = FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS;
+	rename_info->FileNameLength = DWORD(target.length() * sizeof(WCHAR));
+	memcpy(rename_info->FileName, target.get_data(), rename_info->FileNameLength);
+	bool renamed = SetFileInformationByHandle(file, FileRenameInfoEx, rename_info, DWORD(rename_buffer.size())) != FALSE;
+	DWORD rename_error = renamed ? ERROR_SUCCESS : GetLastError();
+	CloseHandle(file);
+	if (!renamed && (rename_error == ERROR_INVALID_PARAMETER || rename_error == ERROR_NOT_SUPPORTED || rename_error == ERROR_INVALID_FUNCTION)) {
+		// Older Windows/filesystems may lack extended rename support. Retain a
+		// safe atomic fallback; never delete the destination to make it succeed.
+		renamed = MoveFileExW(reinterpret_cast<LPCWSTR>(temporary.get_data()), reinterpret_cast<LPCWSTR>(target.get_data()), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+		rename_error = renamed ? ERROR_SUCCESS : GetLastError();
+	}
+	if (!renamed) {
+		DeleteFileW(reinterpret_cast<LPCWSTR>(temporary.get_data()));
+		return fail(vformat("Cannot atomically replace MCP record (Windows error %d); the previous record is intact.", rename_error), r_error, ERR_BUSY);
 	}
 	return OK;
 #elif defined(UNIX_ENABLED)
