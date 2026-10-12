@@ -50,6 +50,9 @@ config_version=5
 config/name="{name}"
 run/main_scene="res://main.tscn"
 
+[editor]
+run/main_run_args="--headless"
+
 [editor_plugins]
 enabled=PackedStringArray("res://addons/mcp_smoke_cleanup/plugin.cfg")
 """,

@@ -161,6 +161,8 @@ public:
 
 class ScopedReadOnlyFile {
 	String path;
+	BitField<FileAccess::UnixPermissionFlags> original_permissions = 0;
+	bool using_unix_permissions = false;
 
 public:
 	explicit ScopedReadOnlyFile(const String &p_path) :
@@ -169,8 +171,34 @@ public:
 
 	~ScopedReadOnlyFile() {
 		if (!path.is_empty() && FileAccess::exists(path)) {
-			FileAccess::set_read_only_attribute(path, false);
+			if (using_unix_permissions) {
+				FileAccess::set_unix_permissions(path, original_permissions);
+			} else {
+				FileAccess::set_read_only_attribute(path, false);
+			}
 		}
+	}
+
+	Error make_read_only() {
+		Error error = FileAccess::set_read_only_attribute(path, true);
+		if (error != ERR_UNAVAILABLE) {
+			return error;
+		}
+
+		// Linux does not support the read-only attribute; remove all write permissions instead.
+		original_permissions = FileAccess::get_unix_permissions(path);
+		BitField<FileAccess::UnixPermissionFlags> permissions = original_permissions;
+		permissions.clear_flag(FileAccess::UNIX_WRITE_OWNER | FileAccess::UNIX_WRITE_GROUP | FileAccess::UNIX_WRITE_OTHER);
+		error = FileAccess::set_unix_permissions(path, permissions);
+		using_unix_permissions = error == OK;
+		return error;
+	}
+
+	bool is_read_only() const {
+		if (using_unix_permissions) {
+			return !FileAccess::get_unix_permissions(path).has_flag(FileAccess::UNIX_WRITE_OWNER | FileAccess::UNIX_WRITE_GROUP | FileAccess::UNIX_WRITE_OTHER);
+		}
+		return FileAccess::get_read_only_attribute(path);
 	}
 };
 
@@ -573,7 +601,8 @@ TEST_CASE("[MCP][Provider] Resource import reads an external source, validates t
 	TestPaths paths = _make_test_paths();
 	REQUIRE(paths.temporary_directory.is_valid());
 	ScopedReadOnlyFile read_only_reset(paths.source_path);
-	REQUIRE(FileAccess::set_read_only_attribute(paths.source_path, true) == OK);
+	REQUIRE(read_only_reset.make_read_only() == OK);
+	REQUIRE(read_only_reset.is_read_only());
 
 	fake_import_state = FakeImportState();
 	fake_import_state.project_root = paths.project_root;
@@ -600,7 +629,7 @@ TEST_CASE("[MCP][Provider] Resource import reads an external source, validates t
 	REQUIRE_FALSE(bool(call_result.result.get("isError", false)));
 	const String target_absolute_path = paths.project_root.path_join("assets/imported.mcpimport");
 	CHECK(FileAccess::get_file_as_string(paths.source_path) == "external source");
-	CHECK(FileAccess::get_read_only_attribute(paths.source_path));
+	CHECK(read_only_reset.is_read_only());
 	CHECK(FileAccess::get_file_as_string(target_absolute_path) == "external source");
 	CHECK(fake_import_state.calls == 1);
 	CHECK(fake_import_state.importer == "mcp_test_resource");
@@ -625,6 +654,8 @@ TEST_CASE("[MCP][Provider] Resource import reads an external source, validates t
 	REQUIRE_FALSE(bool(call_result.result.get("isError", false)));
 	CHECK(bool(Dictionary(call_result.result.get("structuredContent", Dictionary())).get("overwritten", false)));
 	CHECK(fake_import_state.calls == 2);
+	CHECK(FileAccess::get_file_as_string(paths.source_path) == "external source");
+	CHECK(read_only_reset.is_read_only());
 
 	provider->unregister_tools();
 	memdelete(provider);
@@ -636,7 +667,8 @@ TEST_CASE("[MCP][Provider] Failed resource import restores target metadata and p
 	TestPaths paths = _make_test_paths();
 	REQUIRE(paths.temporary_directory.is_valid());
 	ScopedReadOnlyFile read_only_reset(paths.source_path);
-	REQUIRE(FileAccess::set_read_only_attribute(paths.source_path, true) == OK);
+	REQUIRE(read_only_reset.make_read_only() == OK);
+	REQUIRE(read_only_reset.is_read_only());
 
 	const String target_absolute_path = paths.project_root.path_join("assets/imported.mcpimport");
 	REQUIRE(DirAccess::make_dir_recursive_absolute(target_absolute_path.get_base_dir()) == OK);
@@ -659,7 +691,7 @@ TEST_CASE("[MCP][Provider] Failed resource import restores target metadata and p
 	REQUIRE(call_result.status == MCPToolRegistry::CALL_OK);
 	CHECK(_error_code(call_result) == "IMPORT_FAILED");
 	CHECK(FileAccess::get_file_as_string(paths.source_path) == "external source");
-	CHECK(FileAccess::get_read_only_attribute(paths.source_path));
+	CHECK(read_only_reset.is_read_only());
 	CHECK(FileAccess::get_file_as_string(target_absolute_path) == "original target");
 	CHECK(FileAccess::get_file_as_string(target_absolute_path + ".import") == "original metadata");
 	CHECK_FALSE(FileAccess::exists(target_absolute_path + ".unwrap_cache"));
