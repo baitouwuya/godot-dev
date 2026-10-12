@@ -34,6 +34,7 @@
 #include "core/os/process_id.h"
 #include "core/templates/safe_refcount.h"
 #include "editor/editor_data.h"
+#include "editor/file_system/editor_external_change_tracker.h"
 #include "editor/plugins/editor_plugin.h"
 #include "editor/settings/editor_folding.h"
 #include "servers/display/display_server_enums.h"
@@ -432,8 +433,7 @@ private:
 	EditorBottomPanel *bottom_panel = nullptr;
 
 	Tree *disk_changed_list = nullptr;
-	LocalVector<String> disk_changed_scenes;
-	bool disk_changed_project = false;
+	EditorExternalChangeTracker disk_changes;
 	ConfirmationDialog *disk_changed = nullptr;
 	ConfirmationDialog *project_data_missing = nullptr;
 
@@ -680,7 +680,10 @@ private:
 	void _update_update_spinner();
 
 	void _resources_changed(const Vector<String> &p_resources);
+	Vector<EditorExternalChangeTracker::Change> _collect_external_changes() const;
 	void _scan_external_changes();
+	void _show_external_changes(uint64_t p_generation);
+	void _clear_external_changes();
 	void _reload_modified_scenes();
 	void _reload_project_settings();
 	void _resave_externally_modified_scenes(String p_str);

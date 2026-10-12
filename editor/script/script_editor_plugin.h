@@ -32,6 +32,7 @@
 
 #include "core/error/error_list.h"
 #include "core/object/script_language.h"
+#include "editor/file_system/editor_external_change_tracker.h"
 #include "editor/plugins/editor_plugin.h"
 #include "editor/script/script_editor_base.h"
 #include "scene/gui/dialogs.h"
@@ -236,11 +237,16 @@ class ScriptEditor : public PanelContainer {
 	void _prepare_file_menu();
 	void _file_menu_closed();
 
+	EditorExternalChangeTracker disk_changes;
 	Tree *disk_changed_list = nullptr;
 	ConfirmationDialog *disk_changed = nullptr;
 
 	bool restoring_layout;
 
+	Vector<EditorExternalChangeTracker::Change> _collect_external_changes(bool &r_need_ask) const;
+	void _show_external_changes(uint64_t p_generation);
+	void _clear_external_changes();
+	void _reload_modified_scripts();
 	void _resave_scripts(const String &p_str);
 
 	bool _test_script_times_on_disk(Ref<Resource> p_for_script = Ref<Resource>());
@@ -312,7 +318,7 @@ class ScriptEditor : public PanelContainer {
 	void _file_removed(const String &p_file);
 	void _autosave_scripts();
 	void _update_autosave_timer();
-	void _reload_scripts(bool p_refresh_only = false);
+	void _reload_scripts(bool p_refresh_only = false, const PackedStringArray &p_paths = PackedStringArray());
 	void _auto_format_text(ScriptEditorBase *p_seb);
 
 	void _update_members_overview_visibility();

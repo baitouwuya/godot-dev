@@ -689,35 +689,52 @@ void ScriptEditor::_ask_close_current_unsaved_tab(ScriptEditorBase *current) {
 	erase_tab_confirm->popup_centered();
 }
 
-void ScriptEditor::_resave_scripts(const String &p_str) {
-	apply_scripts();
-
-	for (int i = 0; i < tab_container->get_tab_count(); i++) {
-		ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i));
-		if (!seb) {
-			continue;
-		}
-
-		Ref<Resource> scr = seb->get_edited_resource();
-
-		if (scr->is_built_in()) {
-			continue; // Internal script, who cares.
-		}
-
-		_auto_format_text(seb);
-
-		Ref<TextFile> text_file = scr;
-		if (text_file.is_valid()) {
-			seb->apply_code();
-			_save_text_file(text_file, text_file->get_path());
-			break;
-		} else {
-			EditorNode::get_singleton()->save_resource(scr);
-		}
-		seb->tag_saved_version();
-	}
-
+void ScriptEditor::_clear_external_changes() {
+	disk_changes.clear();
 	disk_changed->hide();
+	disk_changed_list->clear();
+}
+
+void ScriptEditor::_resave_scripts(const String &p_str) {
+	bool need_ask = false;
+	if (!disk_changes.is_displayed_current(_collect_external_changes(need_ask))) {
+		_test_script_times_on_disk();
+		return;
+	}
+	const Vector<EditorExternalChangeTracker::Change> changes = disk_changes.get_displayed();
+	_clear_external_changes();
+	for (const EditorExternalChangeTracker::Change &change : changes) {
+		for (int i = 0; i < tab_container->get_tab_count(); i++) {
+			ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i));
+			if (!seb || seb->edited_file_data.path != change.path) {
+				continue;
+			}
+			_auto_format_text(seb);
+			seb->apply_code();
+			const Ref<Resource> resource = seb->get_edited_resource();
+			const Ref<TextFile> text_file = resource;
+			if (text_file.is_valid()) {
+				_save_text_file(text_file, text_file->get_path());
+			} else {
+				EditorNode::get_singleton()->save_resource(resource);
+			}
+			break;
+		}
+	}
+}
+
+void ScriptEditor::_reload_modified_scripts() {
+	bool need_ask = false;
+	if (!disk_changes.is_displayed_current(_collect_external_changes(need_ask))) {
+		_test_script_times_on_disk();
+		return;
+	}
+	PackedStringArray paths;
+	for (const EditorExternalChangeTracker::Change &change : disk_changes.get_displayed()) {
+		paths.push_back(change.path);
+	}
+	_clear_external_changes();
+	_reload_scripts(false, paths);
 }
 
 void ScriptEditor::_res_saved_callback(const Ref<Resource> &p_res) {
@@ -800,53 +817,79 @@ void ScriptEditor::_live_auto_reload_running_scripts() {
 	script_paths_to_reload.clear();
 }
 
-bool ScriptEditor::_test_script_times_on_disk(Ref<Resource> p_for_script) {
-	disk_changed_list->clear();
-	TreeItem *r = disk_changed_list->create_item();
-
-	bool need_ask = false;
-	bool need_reload = false;
-	bool use_autoreload = EDITOR_GET("text_editor/behavior/files/auto_reload_scripts_on_external_change");
-
+Vector<EditorExternalChangeTracker::Change> ScriptEditor::_collect_external_changes(bool &r_need_ask) const {
+	Vector<EditorExternalChangeTracker::Change> changes;
+	r_need_ask = false;
+	const bool use_autoreload = EDITOR_GET("text_editor/behavior/files/auto_reload_scripts_on_external_change");
 	for (int i = 0; i < tab_container->get_tab_count(); i++) {
 		ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i));
-		if (!seb) {
+		if (!seb || seb->get_edited_resource()->is_built_in()) {
 			continue;
 		}
-
-		Ref<Resource> edited_res = seb->get_edited_resource();
-		if (p_for_script.is_valid() && edited_res.is_valid() && p_for_script != edited_res) {
-			continue;
-		}
-
-		if (edited_res->is_built_in()) {
-			continue; // Internal script, who cares.
-		}
-
-		uint64_t last_date = seb->edited_file_data.last_modified_time;
-		uint64_t date = FileAccess::get_modified_time(seb->edited_file_data.path);
-
-		if (last_date != date) {
-			TreeItem *ti = disk_changed_list->create_item(r);
-			ti->set_text(0, seb->edited_file_data.path.get_file());
-
+		const String &path = seb->edited_file_data.path;
+		const uint64_t date = FileAccess::get_modified_time(path);
+		if (seb->edited_file_data.last_modified_time != date) {
+			changes.push_back({ path, date, FileAccess::exists(path) ? FileAccess::get_md5(path) : String() });
 			if (!use_autoreload || seb->is_unsaved()) {
-				need_ask = true;
+				r_need_ask = true;
 			}
-			need_reload = true;
 		}
 	}
+	return changes;
+}
 
-	if (need_reload) {
-		if (!need_ask) {
-			script_editor->reload_scripts();
-			need_reload = false;
-		} else {
-			callable_mp((Window *)disk_changed, &Window::popup_centered_ratio).call_deferred(0.3);
+void ScriptEditor::_show_external_changes(uint64_t p_generation) {
+	if (!disk_changes.can_show(p_generation)) {
+		return;
+	}
+	bool need_ask = false;
+	const Vector<EditorExternalChangeTracker::Change> changes = _collect_external_changes(need_ask);
+	if (!need_ask || changes != disk_changes.get_pending()) {
+		_test_script_times_on_disk();
+		return;
+	}
+	if (!disk_changes.present(p_generation)) {
+		return;
+	}
+	disk_changed_list->clear();
+	TreeItem *root = disk_changed_list->create_item();
+	for (const EditorExternalChangeTracker::Change &change : disk_changes.get_displayed()) {
+		TreeItem *item = disk_changed_list->create_item(root);
+		item->set_text(0, change.path);
+	}
+	disk_changed->popup_centered_ratio(0.3);
+}
+
+bool ScriptEditor::_test_script_times_on_disk(Ref<Resource> p_for_script) {
+	// Even a check for a newly opened script must retain conflicts from other
+	// tabs. The filter only affects the caller's return value, not the dialog.
+	bool need_ask = false;
+	const Vector<EditorExternalChangeTracker::Change> changes = _collect_external_changes(need_ask);
+	if (changes.is_empty()) {
+		_clear_external_changes();
+		return false;
+	}
+	if (!need_ask) {
+		PackedStringArray paths;
+		for (const EditorExternalChangeTracker::Change &change : changes) {
+			paths.push_back(change.path);
+		}
+		_reload_scripts(false, paths);
+		return false;
+	}
+	const uint64_t generation = disk_changes.update(changes);
+	if (disk_changes.can_show(generation)) {
+		callable_mp(this, &ScriptEditor::_show_external_changes).call_deferred(generation);
+	}
+	if (p_for_script.is_null()) {
+		return true;
+	}
+	for (const EditorExternalChangeTracker::Change &change : changes) {
+		if (change.path == p_for_script->get_path()) {
+			return true;
 		}
 	}
-
-	return need_reload;
+	return false;
 }
 
 void _import_text_editor_theme(const String &p_file) {
@@ -2526,16 +2569,16 @@ void ScriptEditor::apply_scripts() const {
 void ScriptEditor::reload_scripts(bool p_refresh_only) {
 	// Call deferred to make sure it runs on the main thread.
 	if (!Thread::is_main_thread()) {
-		callable_mp(this, &ScriptEditor::_reload_scripts).call_deferred(p_refresh_only);
+		callable_mp(this, &ScriptEditor::_reload_scripts).call_deferred(p_refresh_only, PackedStringArray());
 		return;
 	}
 	_reload_scripts(p_refresh_only);
 }
 
-void ScriptEditor::_reload_scripts(bool p_refresh_only) {
+void ScriptEditor::_reload_scripts(bool p_refresh_only, const PackedStringArray &p_paths) {
 	for (int i = 0; i < tab_container->get_tab_count(); i++) {
 		ScriptEditorBase *seb = Object::cast_to<ScriptEditorBase>(tab_container->get_tab_control(i));
-		if (!seb) {
+		if (!seb || (!p_paths.is_empty() && !p_paths.has(seb->edited_file_data.path))) {
 			continue;
 		}
 
@@ -2555,7 +2598,6 @@ void ScriptEditor::_reload_scripts(bool p_refresh_only) {
 			if (last_date == date) {
 				continue;
 			}
-			seb->edited_file_data.last_modified_time = date;
 
 			Ref<Script> scr = edited_res;
 			if (scr.is_valid()) {
@@ -2576,8 +2618,11 @@ void ScriptEditor::_reload_scripts(bool p_refresh_only) {
 
 			Ref<TextFile> text_file = edited_res;
 			if (text_file.is_valid()) {
-				text_file->reload_from_file();
+				const Error error = text_file->load_text(text_file->get_path());
+				ERR_CONTINUE(error != OK);
 			}
+			// A failed read must retain both the dirty buffer and its old baseline.
+			seb->edited_file_data.last_modified_time = date;
 		}
 
 		if (TextEditorBase *teb = Object::cast_to<TextEditorBase>(seb)) {
@@ -2587,7 +2632,7 @@ void ScriptEditor::_reload_scripts(bool p_refresh_only) {
 		}
 	}
 
-	disk_changed->hide();
+	_clear_external_changes();
 	_update_script_names();
 }
 
@@ -4135,7 +4180,8 @@ ScriptEditor::ScriptEditor(WindowWrapper *p_wrapper) {
 		what_action_label->set_text(TTRC("What action should be taken?"));
 		vbc->add_child(what_action_label);
 
-		disk_changed->connect(SceneStringName(confirmed), callable_mp(this, &ScriptEditor::reload_scripts).bind(false));
+		disk_changed->connect(SceneStringName(confirmed), callable_mp(this, &ScriptEditor::_reload_modified_scripts));
+		disk_changed->connect(SNAME("canceled"), callable_mp(this, &ScriptEditor::_clear_external_changes));
 		disk_changed->set_ok_button_text(TTRC("Reload from disk"));
 
 		disk_changed->add_button(TTRC("Ignore external changes"), !DisplayServer::get_singleton()->get_swap_cancel_ok(), "resave");

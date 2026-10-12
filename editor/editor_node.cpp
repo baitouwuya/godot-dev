@@ -1547,88 +1547,114 @@ void EditorNode::_remove_lock_file() {
 	OS::get_singleton()->remove_lock_file();
 }
 
-void EditorNode::_scan_external_changes() {
-	disk_changed_list->clear();
-	TreeItem *r = disk_changed_list->create_item();
-	disk_changed_list->set_hide_root(true);
-	bool need_reload = false;
-
-	disk_changed_scenes.clear();
-	disk_changed_project = false;
-
-	// Check if any edited scene has changed.
+Vector<EditorExternalChangeTracker::Change> EditorNode::_collect_external_changes() const {
+	Vector<EditorExternalChangeTracker::Change> changes;
 	for (int i = 0; i < editor_data.get_edited_scene_count(); i++) {
-		Ref<DirAccess> da = DirAccess::create(DirAccess::ACCESS_RESOURCES);
-
 		const String scene_path = editor_data.get_scene_path(i);
-
-		if (scene_path == "" || !da->file_exists(scene_path)) {
+		if (scene_path.is_empty() || !FileAccess::exists(scene_path)) {
 			continue;
 		}
-
-		uint64_t last_date = editor_data.get_scene_modified_time(i);
-		uint64_t date = FileAccess::get_modified_time(scene_path);
-
-		if (date > last_date) {
-			TreeItem *ti = disk_changed_list->create_item(r);
-			ti->set_text(0, scene_path.get_file());
-			need_reload = true;
-			disk_changed_scenes.push_back(scene_path);
+		const uint64_t date = FileAccess::get_modified_time(scene_path);
+		if (date > editor_data.get_scene_modified_time(i)) {
+			changes.push_back({ scene_path, date, FileAccess::get_md5(scene_path) });
 		}
 	}
 
-	String project_settings_path = ProjectSettings::get_singleton()->get_resource_path().path_join("project.godot");
-	if (FileAccess::get_modified_time(project_settings_path) > ProjectSettings::get_singleton()->get_last_saved_time()) {
-		TreeItem *ti = disk_changed_list->create_item(r);
-		ti->set_text(0, "project.godot");
-		need_reload = true;
-		disk_changed_project = true;
+	const String project_path = "res://project.godot";
+	const uint64_t project_date = FileAccess::get_modified_time(project_path);
+	if (project_date > ProjectSettings::get_singleton()->get_last_saved_time()) {
+		changes.push_back({ project_path, project_date, FileAccess::get_md5(project_path) });
 	}
+	return changes;
+}
 
-	if (need_reload) {
-		callable_mp((Window *)disk_changed, &Window::popup_centered_ratio).call_deferred(0.3);
+void EditorNode::_clear_external_changes() {
+	disk_changes.clear();
+	disk_changed->hide();
+	disk_changed_list->clear();
+}
+
+void EditorNode::_scan_external_changes() {
+	const Vector<EditorExternalChangeTracker::Change> changes = _collect_external_changes();
+	if (changes.is_empty()) {
+		_clear_external_changes();
+		return;
 	}
+	const uint64_t generation = disk_changes.update(changes);
+	if (disk_changes.can_show(generation)) {
+		callable_mp(this, &EditorNode::_show_external_changes).call_deferred(generation);
+	}
+}
+
+void EditorNode::_show_external_changes(uint64_t p_generation) {
+	if (!disk_changes.can_show(p_generation)) {
+		return;
+	}
+	// A save, reload or another writer may have resolved or replaced the changes
+	// while the popup was queued. Never show stale or empty contents.
+	if (_collect_external_changes() != disk_changes.get_pending()) {
+		_scan_external_changes();
+		return;
+	}
+	if (!disk_changes.present(p_generation)) {
+		return;
+	}
+	disk_changed_list->clear();
+	TreeItem *root = disk_changed_list->create_item();
+	disk_changed_list->set_hide_root(true);
+	for (const EditorExternalChangeTracker::Change &change : disk_changes.get_displayed()) {
+		TreeItem *item = disk_changed_list->create_item(root);
+		item->set_text(0, change.path);
+	}
+	disk_changed->popup_centered_ratio(0.3);
 }
 
 void EditorNode::_resave_externally_modified_scenes(String p_str) {
-	for (const String &scene_path : disk_changed_scenes) {
-		_save_scene(scene_path);
+	if (!disk_changes.is_displayed_current(_collect_external_changes())) {
+		_scan_external_changes();
+		return;
 	}
-
-	if (disk_changed_project) {
-		ProjectSettings::get_singleton()->save();
+	const Vector<EditorExternalChangeTracker::Change> changes = disk_changes.get_displayed();
+	_clear_external_changes();
+	for (const EditorExternalChangeTracker::Change &change : changes) {
+		if (change.path == "res://project.godot") {
+			ProjectSettings::get_singleton()->save();
+		} else {
+			const int scene_index = editor_data.get_edited_scene_from_path(change.path);
+			if (scene_index != -1) {
+				_save_scene(change.path, scene_index);
+			}
+		}
 	}
-
-	disk_changed->hide();
 }
 
 void EditorNode::_reload_modified_scenes() {
-	int current_idx = editor_data.get_edited_scene();
-
-	for (int i = 0; i < editor_data.get_edited_scene_count(); i++) {
-		if (editor_data.get_scene_path(i) == "") {
+	if (!disk_changes.is_displayed_current(_collect_external_changes())) {
+		_scan_external_changes();
+		return;
+	}
+	const Vector<EditorExternalChangeTracker::Change> changes = disk_changes.get_displayed();
+	_clear_external_changes();
+	const int current_idx = editor_data.get_edited_scene();
+	for (const EditorExternalChangeTracker::Change &change : changes) {
+		if (change.path == "res://project.godot") {
+			_reload_project_settings();
 			continue;
 		}
-
-		uint64_t last_date = editor_data.get_scene_modified_time(i);
-		uint64_t date = FileAccess::get_modified_time(editor_data.get_scene_path(i));
-
-		if (date > last_date) {
-			String filename = editor_data.get_scene_path(i);
-			editor_data.set_edited_scene(i);
-			_remove_edited_scene(false);
-
-			Error err = open_scene(filename);
-			if (err != OK) {
-				ERR_PRINT(vformat("Failed to load scene: %s", filename));
-			}
-			editor_data.move_edited_scene_to_index(i);
+		const int scene_index = editor_data.get_edited_scene_from_path(change.path);
+		if (scene_index == -1) {
+			continue;
 		}
+		editor_data.set_edited_scene(scene_index);
+		_remove_edited_scene(false);
+		const Error err = open_scene(change.path);
+		if (err != OK) {
+			ERR_PRINT(vformat("Failed to load scene: %s", change.path));
+		}
+		editor_data.move_edited_scene_to_index(scene_index);
 	}
-
 	_set_current_scene(current_idx);
 	scene_tabs->update_scene_tabs();
-	disk_changed->hide();
 }
 
 void EditorNode::_reload_project_settings() {
@@ -9371,7 +9397,7 @@ EditorNode::EditorNode() {
 		vbc->add_child(what_action_label);
 
 		disk_changed->connect(SceneStringName(confirmed), callable_mp(this, &EditorNode::_reload_modified_scenes));
-		disk_changed->connect(SceneStringName(confirmed), callable_mp(this, &EditorNode::_reload_project_settings));
+		disk_changed->connect(SNAME("canceled"), callable_mp(this, &EditorNode::_clear_external_changes));
 		disk_changed->set_ok_button_text(TTR("Reload from disk"));
 
 		disk_changed->add_button(TTR("Ignore external changes"), !DisplayServer::get_singleton()->get_swap_cancel_ok(), "resave");
