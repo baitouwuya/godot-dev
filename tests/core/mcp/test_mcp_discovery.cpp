@@ -114,4 +114,69 @@ TEST_CASE("[MCP][Discovery] Removes records only for the expected instance") {
 	CHECK_FALSE(FileAccess::exists(MCPDiscovery::get_record_path(discovery_directory, identity.project_id)));
 }
 
+TEST_CASE("[MCP][Discovery] Private records stay owner-only across atomic refresh") {
+	Error error = OK;
+	Ref<DirAccess> directory = DirAccess::create_temp("mcp_discovery_permissions", false, &error);
+	REQUIRE(error == OK);
+	REQUIRE(directory->make_dir("project") == OK);
+	MCPProjectIdentity identity;
+	REQUIRE(MCPProjectIdentity::create(directory->get_current_dir().path_join("project"), identity) == OK);
+	MCPDiscoveryRecord record = MCPDiscoveryRecord::create(identity, "streamable-http", "http://127.0.0.1:32123/mcp", "2025-06-18", "private-token", 1000);
+	const String records = directory->get_current_dir().path_join("records");
+	const String path = MCPDiscovery::get_record_path(records, identity.project_id);
+	for (int i = 0; i < 3; i++) {
+		record.heartbeat_at_unix_ms++;
+		REQUIRE(MCPDiscovery::write_record(records, record, true) == OK);
+		MCPDiscoveryRecord loaded;
+		REQUIRE(MCPDiscovery::read_record_file(path, loaded) == OK);
+		CHECK(loaded.heartbeat_at_unix_ms == record.heartbeat_at_unix_ms);
+		CHECK(loaded.auth_secret == record.auth_secret);
+#ifdef UNIX_ENABLED
+		CHECK(FileAccess::get_unix_permissions(path) == 0600);
+		CHECK(FileAccess::get_unix_permissions(records) == 0700);
+#endif
+	}
+	Ref<DirAccess> entries = DirAccess::open(records);
+	REQUIRE(entries.is_valid());
+	CHECK(entries->get_files().size() == 1);
+}
+
+TEST_CASE("[MCP][Discovery] Failed replacement preserves previous readable record") {
+	Error error = OK;
+	Ref<DirAccess> directory = DirAccess::create_temp("mcp_discovery_atomic", false, &error);
+	REQUIRE(error == OK);
+	REQUIRE(directory->make_dir("project") == OK);
+	MCPProjectIdentity identity;
+	REQUIRE(MCPProjectIdentity::create(directory->get_current_dir().path_join("project"), identity) == OK);
+	const String records = directory->get_current_dir().path_join("records");
+	MCPDiscoveryRecord record = MCPDiscoveryRecord::create(identity, "streamable-http", "http://127.0.0.1:32123/mcp", "2025-06-18", "private-token", 1000);
+	REQUIRE(MCPDiscovery::write_record(records, record, true) == OK);
+	const String path = MCPDiscovery::get_record_path(records, identity.project_id);
+	MCPDiscoveryRecord invalid = record;
+	invalid.instance_id = "invalid";
+	CHECK(MCPDiscovery::write_record_file(path, invalid, true) == ERR_INVALID_DATA);
+	MCPDiscoveryRecord loaded;
+	REQUIRE(MCPDiscovery::read_record_file(path, loaded) == OK);
+	CHECK(loaded.instance_id == record.instance_id);
+	CHECK(loaded.auth_secret == record.auth_secret);
+}
+
+#ifdef UNIX_ENABLED
+TEST_CASE("[MCP][Discovery] Refuses a symbolic-link record directory") {
+	Error error = OK;
+	Ref<DirAccess> directory = DirAccess::create_temp("mcp_discovery_symlink", false, &error);
+	REQUIRE(error == OK);
+	REQUIRE(directory->make_dir("project") == OK);
+	REQUIRE(directory->make_dir("target") == OK);
+	const String target = directory->get_current_dir().path_join("target");
+	const String link = directory->get_current_dir().path_join("link");
+	REQUIRE(directory->create_link(target, link) == OK);
+	MCPProjectIdentity identity;
+	REQUIRE(MCPProjectIdentity::create(directory->get_current_dir().path_join("project"), identity) == OK);
+	MCPDiscoveryRecord record = MCPDiscoveryRecord::create(identity, "streamable-http", "http://127.0.0.1:32123/mcp", "2025-06-18", "private-token", 1000);
+	CHECK(MCPDiscovery::write_record(link, record, true) != OK);
+	CHECK_FALSE(FileAccess::exists(MCPDiscovery::get_record_path(target, identity.project_id)));
+}
+#endif
+
 } // namespace TestMCPDiscovery

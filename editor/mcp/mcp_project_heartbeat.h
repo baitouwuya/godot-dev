@@ -38,6 +38,14 @@
 class MCPProjectLease;
 
 class MCPProjectHeartbeat {
+public:
+	enum Status {
+		STATUS_HEALTHY,
+		STATUS_RETRYING,
+		STATUS_OWNERSHIP_LOST,
+	};
+
+private:
 	static constexpr uint64_t DEFAULT_INTERVAL_USEC = 2 * 1000 * 1000;
 	static constexpr uint64_t STOP_POLL_INTERVAL_USEC = 20 * 1000;
 
@@ -47,16 +55,20 @@ class MCPProjectHeartbeat {
 	MCPProjectLease *lease = nullptr;
 	String discovery_directory;
 	MCPDiscoveryRecord record;
-	String failure;
+	String status_message;
+	Status status = STATUS_HEALTHY;
+	bool status_changed = false;
 	uint64_t interval_usec = DEFAULT_INTERVAL_USEC;
 
 	static void _thread_main(void *p_userdata);
 	void _run();
+	void _set_status(Status p_status, const String &p_message);
 
 public:
 	Error start(MCPProjectLease *p_lease, const String &p_discovery_directory, const MCPDiscoveryRecord &p_record, uint64_t p_interval_usec = DEFAULT_INTERVAL_USEC);
 	void stop();
-	bool poll_failure(String &r_failure);
+	bool poll_status_change(Status &r_status, String &r_message);
+	Status get_status() const;
 	bool is_running() const { return running.is_set(); }
 
 	~MCPProjectHeartbeat();

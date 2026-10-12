@@ -34,6 +34,7 @@
 #include "core/io/file_access.h"
 #include "core/io/json.h"
 #include "core/math/math_funcs.h"
+#include "core/mcp/mcp_record_io.h"
 #include "core/os/os.h"
 
 namespace {
@@ -282,54 +283,21 @@ Error MCPDiscovery::write_record_file(const String &p_path, const MCPDiscoveryRe
 		return ERR_INVALID_DATA;
 	}
 
-	const Error directory_error = DirAccess::make_dir_recursive_absolute(p_path.get_base_dir());
-	if (directory_error != OK && directory_error != ERR_ALREADY_EXISTS) {
-		set_error(r_error, vformat("Cannot create MCP record directory '%s'.", p_path.get_base_dir()));
-		return directory_error;
-	}
-
-	const String temporary_path = p_path + "." + p_record.instance_id + "." + String::num_uint64(OS::get_singleton()->get_ticks_usec()) + ".tmp";
-	Error open_error = OK;
-	Ref<FileAccess> file = FileAccess::open(temporary_path, FileAccess::WRITE, &open_error);
-	if (file.is_null()) {
-		set_error(r_error, vformat("Cannot open temporary MCP record '%s' for writing.", temporary_path));
-		return open_error == OK ? ERR_CANT_OPEN : open_error;
-	}
-	file->store_string(JSON::stringify(p_record.to_dictionary(p_include_secret), "\t"));
-	file->flush();
-	const Error write_error = file->get_error();
-	file->close();
-	if (write_error != OK) {
-		DirAccess::remove_absolute(temporary_path);
-		set_error(r_error, vformat("Cannot write temporary MCP record '%s'.", temporary_path));
-		return write_error;
-	}
-
-	const Error rename_error = DirAccess::rename_absolute(temporary_path, p_path);
-	if (rename_error != OK) {
-		DirAccess::remove_absolute(temporary_path);
-		set_error(r_error, vformat("Cannot publish MCP record '%s'.", p_path));
-	}
-	return rename_error;
+	return MCPRecordIO::write_atomic(p_path, JSON::stringify(p_record.to_dictionary(p_include_secret), "\t"), r_error);
 }
 
 Error MCPDiscovery::read_record_file(const String &p_path, MCPDiscoveryRecord &r_record, String *r_error) {
 	r_record = MCPDiscoveryRecord();
 	set_error(r_error, String());
 
-	Error open_error = OK;
-	Ref<FileAccess> file = FileAccess::open(p_path, FileAccess::READ, &open_error);
-	if (file.is_null()) {
-		set_error(r_error, vformat("Cannot open MCP record '%s'.", p_path));
-		return open_error == OK ? ERR_CANT_OPEN : open_error;
-	}
-	if (file->get_length() > MAX_RECORD_BYTES) {
-		set_error(r_error, vformat("MCP record '%s' exceeds the size limit.", p_path));
-		return ERR_FILE_CORRUPT;
+	String text;
+	const Error read_error = MCPRecordIO::read(p_path, MAX_RECORD_BYTES, text, r_error);
+	if (read_error != OK) {
+		return read_error;
 	}
 
 	JSON json;
-	const Error parse_error = json.parse(file->get_as_utf8_string());
+	const Error parse_error = json.parse(text);
 	if (parse_error != OK) {
 		set_error(r_error, vformat("Cannot parse MCP record '%s': %s", p_path, json.get_error_message()));
 		return ERR_PARSE_ERROR;

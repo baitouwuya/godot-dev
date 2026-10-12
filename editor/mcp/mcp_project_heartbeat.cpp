@@ -37,8 +37,18 @@ void MCPProjectHeartbeat::_thread_main(void *p_userdata) {
 	static_cast<MCPProjectHeartbeat *>(p_userdata)->_run();
 }
 
+void MCPProjectHeartbeat::_set_status(Status p_status, const String &p_message) {
+	MutexLock lock(state_mutex);
+	if (status != p_status) {
+		status_changed = true;
+	}
+	status = p_status;
+	status_message = p_message;
+}
+
 void MCPProjectHeartbeat::_run() {
 	Thread::set_name("MCP Heartbeat");
+	uint64_t retry_interval_usec = interval_usec;
 	uint64_t next_refresh_usec = OS::get_singleton()->get_ticks_usec() + interval_usec;
 	while (running.is_set()) {
 		const uint64_t now_usec = OS::get_singleton()->get_ticks_usec();
@@ -51,16 +61,25 @@ void MCPProjectHeartbeat::_run() {
 		updated_record.heartbeat_at_unix_ms = MCPDiscovery::get_current_unix_time_ms();
 		String error;
 		Error refresh_error = lease->refresh(updated_record, &error, updated_record.heartbeat_at_unix_ms);
+		if (refresh_error == ERR_UNAUTHORIZED || !lease->is_acquired()) {
+			_set_status(STATUS_OWNERSHIP_LOST, error.is_empty() ? String(error_names[refresh_error]) : error);
+			running.clear();
+			return;
+		}
 		if (refresh_error == OK) {
 			refresh_error = MCPDiscovery::write_record(discovery_directory, updated_record, true, &error);
 		}
 		if (refresh_error != OK) {
-			MutexLock lock(state_mutex);
-			failure = error.is_empty() ? error_names[refresh_error] : error;
-			running.clear();
-			return;
+			// Discovery is an address cache, not the lease itself. A reader, disk
+			// error, or temporary publishing failure must not quit the editor.
+			_set_status(STATUS_RETRYING, error.is_empty() ? String(error_names[refresh_error]) : error);
+			retry_interval_usec = MIN(retry_interval_usec * 2, uint64_t(30 * 1000 * 1000));
+			next_refresh_usec = OS::get_singleton()->get_ticks_usec() + retry_interval_usec;
+			continue;
 		}
 		record = updated_record;
+		retry_interval_usec = interval_usec;
+		_set_status(STATUS_HEALTHY, "MCP discovery publishing recovered.");
 		next_refresh_usec = OS::get_singleton()->get_ticks_usec() + interval_usec;
 	}
 }
@@ -76,7 +95,9 @@ Error MCPProjectHeartbeat::start(MCPProjectLease *p_lease, const String &p_disco
 	interval_usec = p_interval_usec;
 	{
 		MutexLock lock(state_mutex);
-		failure = String();
+		status_message = String();
+		status = STATUS_HEALTHY;
+		status_changed = false;
 	}
 	running.set();
 	const Thread::ID thread_id = thread.start(_thread_main, this);
@@ -100,14 +121,20 @@ void MCPProjectHeartbeat::stop() {
 	record = MCPDiscoveryRecord();
 }
 
-bool MCPProjectHeartbeat::poll_failure(String &r_failure) {
+bool MCPProjectHeartbeat::poll_status_change(Status &r_status, String &r_message) {
 	MutexLock lock(state_mutex);
-	if (failure.is_empty()) {
+	if (!status_changed) {
 		return false;
 	}
-	r_failure = failure;
-	failure = String();
+	r_status = status;
+	r_message = status_message;
+	status_changed = false;
 	return true;
+}
+
+MCPProjectHeartbeat::Status MCPProjectHeartbeat::get_status() const {
+	MutexLock lock(state_mutex);
+	return status;
 }
 
 MCPProjectHeartbeat::~MCPProjectHeartbeat() {

@@ -266,9 +266,24 @@ void MCPEditorPlugin::_notification(int p_what) {
 			}
 			host.poll();
 			builtin_features.process();
-			String heartbeat_failure;
-			if (project_heartbeat.poll_failure(heartbeat_failure)) {
-				_exit_with_error("Godot MCP Host lost its project lease: " + heartbeat_failure);
+			MCPProjectHeartbeat::Status heartbeat_status;
+			String heartbeat_message;
+			if (project_heartbeat.poll_status_change(heartbeat_status, heartbeat_message)) {
+				if (heartbeat_status == MCPProjectHeartbeat::STATUS_OWNERSHIP_LOST) {
+					// Preserve the user's editor and unsaved buffers. Only the MCP
+					// service loses authority when another instance owns the lease.
+					WARN_PRINT("MCP stopped after losing its project lease. The editor remains open: " + heartbeat_message);
+					startup_state = STARTUP_DISABLED;
+					_stop_mcp();
+					set_process_internal(false);
+					if (!_is_headless() && EditorNode::get_singleton()) {
+						EditorNode::get_singleton()->show_warning(TTR("MCP lost ownership of this project and has stopped. Your editor and unsaved changes remain open."));
+					}
+				} else if (heartbeat_status == MCPProjectHeartbeat::STATUS_RETRYING) {
+					WARN_PRINT("MCP discovery publishing is temporarily unavailable; retrying without closing the editor: " + heartbeat_message);
+				} else {
+					print_verbose(heartbeat_message);
+				}
 			}
 		} break;
 
