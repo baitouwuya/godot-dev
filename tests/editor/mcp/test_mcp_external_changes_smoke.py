@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any, cast
 
 from mcp_smoke_test_utils import (
     ProcessRunner,
@@ -171,14 +172,14 @@ script="plugin.gd"
             def alive() -> None:
                 require(process.poll() is None, "editor exited: " + (root / "stderr.log").read_text(errors="replace"))
 
-            def discovery_attempt():
+            def discovery_attempt() -> dict[str, Any] | None:
                 alive()
                 result = runner.invoke(["--mcp-discover", "--path", str(project)])
                 return parse_discovery(result, "external changes") if result.returncode == 0 else None
 
-            discovery = wait_until(timeout, discovery_attempt, "MCP discovery")
+            discovery = cast(dict[str, Any], wait_until(timeout, discovery_attempt, "MCP discovery"))
 
-            def call(name: str, arguments: dict, error: str | None = None) -> dict:
+            def call(name: str, arguments: dict[str, Any], error: str | None = None) -> dict[str, Any]:
                 alive()
                 result = invoke_stdio(
                     runner, project, discovery["protocolVersion"], [tool_call(2, name, arguments)], name
@@ -186,9 +187,9 @@ script="plugin.gd"
                 if error:
                     require(tool_error_code(result, 2, name) == error, f"{name} did not return {error}")
                     return {}
-                return structured_result(result, 2, name)
+                return cast(dict[str, Any], structured_result(result, 2, name))
 
-            def command(action: str, **kwargs) -> list:
+            def command(action: str, **kwargs: Any) -> list[dict[str, Any]]:
                 nonlocal command_id
                 command_id += 1
                 data = {"id": command_id, "action": action, **kwargs}
@@ -196,24 +197,24 @@ script="plugin.gd"
                 pending.write_text(json.dumps(data), encoding="utf-8")
                 pending.replace(project / ".command.json")
 
-                def response_attempt():
+                def response_attempt() -> dict[str, Any] | None:
                     alive()
                     try:
-                        response = json.loads((project / ".response.json").read_text())
+                        response = cast(dict[str, Any], json.loads((project / ".response.json").read_text()))
                     except (FileNotFoundError, json.JSONDecodeError):
                         return None
                     return response if response.get("id") == command_id else None
 
-                response = wait_until(timeout, response_attempt, action)
+                response = cast(dict[str, Any], wait_until(timeout, response_attempt, action))
                 require(not response["error"], response["error"])
-                return response["dialogs"]
+                return cast(list[dict[str, Any]], response["dialogs"])
 
-            def rows(dialogs: list, scope: str) -> set[str]:
+            def rows(dialogs: list[dict[str, Any]], scope: str) -> set[str]:
                 matching = [dialog for dialog in dialogs if dialog["scope"] == scope]
                 require(len(matching) <= 1, f"duplicate {scope} dialogs: {matching}")
                 return set(matching[0]["rows"]) if matching else set()
 
-            def state(name: str) -> dict:
+            def state(name: str) -> dict[str, Any]:
                 return call("godot.script.open", {"path": "res://" + name})
 
             def edit(name: str, value: int) -> str:

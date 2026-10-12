@@ -50,6 +50,10 @@
 
 #include "modules/modules_enabled.gen.h"
 
+#ifdef MODULE_GDSCRIPT_ENABLED
+#include "modules/gdscript/gdscript.h"
+#endif
+
 TEST_FORCE_LINK(test_mcp_resource_provider);
 
 namespace TestMCPResourceProvider {
@@ -570,9 +574,13 @@ TEST_CASE("[MCP][Provider] Resource save redirects scripts without writing cache
 	const String original_content = "extends Node\nvar value = 1\n";
 	const String unsaved_content = "extends Node\nvar value = 2\n";
 	REQUIRE(_write_text(absolute_path, original_content) == OK);
-	const Ref<Script> script = ResourceLoader::load(absolute_path);
-	REQUIRE(script.is_valid());
+	// This test exercises the save guard for an already cached Script, not the
+	// language parser or scene-class registration of a full editor session.
+	Ref<GDScript> script;
+	script.instantiate();
+	script->set_path(absolute_path);
 	script->set_source_code(unsaved_content);
+	REQUIRE(ResourceCache::get_ref(absolute_path) == script);
 	const uint64_t modified_time = FileAccess::get_modified_time(absolute_path);
 
 	MCPToolRegistry registry;
