@@ -297,7 +297,9 @@ GDScriptAnalysisSession::GDScriptAnalysisSession(uint64_t p_session_id, const Re
 
 GDScriptAnalysisSession::~GDScriptAnalysisSession() {
 	while (!parser_cache.is_empty()) {
-		_remove_cached_parser(parser_cache.begin()->key);
+		// Cleanup also uses the path after removing its parser cache entry.
+		const String path = parser_cache.begin()->key;
+		_remove_cached_parser(path);
 	}
 	documents.clear();
 }

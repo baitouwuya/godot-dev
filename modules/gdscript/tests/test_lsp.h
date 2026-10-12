@@ -660,6 +660,28 @@ TEST_SUITE("[Modules][GDScript][LSP][Editor]") {
 		finish_language();
 	}
 
+	TEST_CASE("[analysis_session][destroy_cached_transient_parsers]") {
+		GDScriptLanguageProtocol *proto = initialize(root);
+		REQUIRE(proto);
+		Ref<GDScriptAnalysisService> service = proto->get_analysis_service();
+		Ref<GDScriptAnalysisSession> session = service->create_session();
+		const uint64_t session_id = session->get_session_id();
+		const ObjectID instance_id = session->get_instance_id();
+		const String disk_path = "res://lsp/local_variables.gd";
+		REQUIRE(session->get_parse_result(disk_path));
+		CHECK_GT(session->get_cached_parser_count(), 0);
+		REQUIRE(session->get_document(disk_path));
+		CHECK_EQ(session->get_document(disk_path)->source_state, GDScriptAnalysisSession::SOURCE_STATE_DISK);
+
+		// Leave the transient parser cached so destruction exercises both maps.
+		CHECK(service->remove_session(session_id));
+		session.unref();
+		CHECK(ObjectDB::get_instance(instance_id) == nullptr);
+		CHECK(service->get_session(session_id).is_null());
+		service.unref();
+		finish_language();
+	}
+
 	TEST_CASE("[workspace][resolve_symbol]") {
 		EditorFileSystem *efs = memnew(EditorFileSystem);
 		GDScriptLanguageProtocol *proto = initialize(root);

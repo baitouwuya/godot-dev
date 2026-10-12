@@ -172,6 +172,12 @@ TEST_CASE("[MCP][Provider] GDScript session manager owns MCP lifecycle cleanup")
 	REQUIRE(second_session.is_valid());
 	const uint64_t first_analysis_id = first_session->get_session_id();
 	const uint64_t second_analysis_id = second_session->get_session_id();
+	const String path = "res://mcp_lifecycle_cleanup.gd";
+	Array diagnostics;
+	REQUIRE(manager->sync_document("lifecycle-first", path, "var first := true\n", 1, diagnostics) == OK);
+	REQUIRE(manager->sync_document("lifecycle-second", path, "var second := true\n", 1, diagnostics) == OK);
+	manager->track_open_editor_document("lifecycle-first", path);
+	manager->track_open_editor_document("lifecycle-second", path);
 
 	manager->on_session_removed("lifecycle-first");
 	CHECK(manager->get_session_count() == 1);
@@ -182,6 +188,15 @@ TEST_CASE("[MCP][Provider] GDScript session manager owns MCP lifecycle cleanup")
 	CHECK(manager->get_session_count() == 0);
 	CHECK(service->get_session(second_analysis_id).is_null());
 	manager->shutdown();
+	CHECK(manager->get_session_count() == 0);
+
+	// Reusing an ID must not retain the editor paths from its previous session.
+	Ref<GDScriptAnalysisSession> recreated = manager->get_or_create_session("lifecycle-second");
+	REQUIRE(recreated.is_valid());
+	CHECK_NE(recreated->get_session_id(), second_analysis_id);
+	CHECK_FALSE(recreated->has_document(path));
+	CHECK(manager->reconcile_open_editor_documents("lifecycle-second", HashSet<String>()) == OK);
+	manager->clear();
 	CHECK(manager->get_session_count() == 0);
 }
 

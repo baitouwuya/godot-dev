@@ -182,7 +182,9 @@ bool MCPGDScriptSessionManager::release_session(const String &p_session_id) {
 
 void MCPGDScriptSessionManager::clear() {
 	while (!sessions.is_empty()) {
-		release_session(sessions.begin()->key);
+		// Releasing a session also removes editor paths after erasing this key.
+		const String session_id = sessions.begin()->key;
+		release_session(session_id);
 	}
 }
 
