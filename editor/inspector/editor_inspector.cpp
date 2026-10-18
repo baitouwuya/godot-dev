@@ -230,7 +230,7 @@ Size2 EditorProperty::get_minimum_size() const {
 		return Vector2();
 	}
 
-	Size2 ms = Size2(0, theme_cache.inspector_property_height);
+	Size2 ms;
 	for (int i = 0; i < get_child_count(); i++) {
 		Control *c = as_sortable_control(get_child(i));
 		if (!c) {
@@ -250,7 +250,8 @@ Size2 EditorProperty::get_minimum_size() const {
 		ms = ms.max(minsize);
 	}
 
-	if (!label.is_empty()) {
+	bool label_empty = label.is_empty();
+	if (!label_empty) {
 		ms.width += theme_cache.font_offset + theme_cache.horizontal_separation;
 	}
 
@@ -285,11 +286,18 @@ Size2 EditorProperty::get_minimum_size() const {
 	ms.height = MAX(ms.height, rs.y);
 
 	if (bottom_editor != nullptr && bottom_editor->is_visible()) {
-		ms.height += label.is_empty() ? 0 : _get_v_separation();
+		// If the label area is empty, leave the height alone before calculating the bottom editor.
+		if (ms.height > 0 || !label_empty) {
+			ms.height = MAX(ms.height, theme_cache.inspector_property_height);
+		}
+
+		ms.height += label_empty ? 0 : _get_v_separation();
 		Size2 bems = bottom_editor->get_combined_minimum_size();
 		ms.height += bems.height;
 		ms.width = MAX(ms.width, bems.width);
 	}
+
+	ms.height = MAX(ms.height, theme_cache.inspector_property_height);
 
 	return ms;
 }
@@ -356,12 +364,15 @@ void EditorProperty::_notification(int p_what) {
 			right_child_rect = Rect2();
 			bottom_child_rect = Rect2();
 
+			Size2 left_container_ms = left_container->get_combined_minimum_size();
+			Size2 right_container_ms = right_container->get_combined_minimum_size();
+
 			{
 				int child_room = size.width * (1.0 - split_ratio) - name_fixed_size;
 				int separation = theme_cache.horizontal_separation;
 				int height = theme_cache.inspector_property_height;
-				int minw = 0;
 				int half_padding = theme_cache.padding / 2;
+				real_t minw = 0;
 				bool no_children = true;
 
 				// Compute the room needed.
@@ -374,12 +385,16 @@ void EditorProperty::_notification(int p_what) {
 						continue;
 					}
 
-					Size2 minsize = c->get_combined_minimum_size();
+					Size2 minsize;
 					if (c != left_container && c != right_container) {
+						minsize = c->get_combined_minimum_size();
 						minw = MAX(minw, minsize.width);
 						child_room = MAX(child_room, minw);
 						no_children = false;
+					} else {
+						minsize = c == left_container ? left_container_ms : right_container_ms;
 					}
+
 					height = MAX(height, minsize.height);
 				}
 
@@ -398,16 +413,19 @@ void EditorProperty::_notification(int p_what) {
 					}
 				}
 
-				if (rect.size.x > 1) {
-					rect.size.x -= right_container->get_combined_minimum_size().x;
-					if (is_layout_rtl()) {
-						rect.position.x += right_container->get_combined_minimum_size().x;
-					}
+				rect.size.width -= right_container_ms.width;
+				if (is_layout_rtl()) {
+					rect.position.x += right_container_ms.width;
 				}
 
 				if (bottom_editor) {
 					int v_offset = label.is_empty() ? 0 : _get_v_separation();
-					bottom_rect = Rect2(0, rect.size.height + v_offset, size.width, bottom_editor->get_combined_minimum_size().height);
+					bottom_rect.size = Size2(size.width, bottom_editor->get_combined_minimum_size().height);
+
+					// If the label area is empty, don't take it into account for the bottom editor position.
+					if (!no_children || !label.is_empty() || left_container->get_child_count() > 0 || right_container->get_child_count() > 0) {
+						bottom_rect.position = Point2(0, rect.size.height + v_offset);
+					}
 				}
 
 				if (keying) {
@@ -454,7 +472,7 @@ void EditorProperty::_notification(int p_what) {
 
 				// Guarantee that the minimum width
 				// of the properties are respected.
-				int diff = rect.size.x - minw;
+				real_t diff = rect.size.x - minw;
 				if (diff < 0) {
 					text_size += diff;
 
@@ -462,6 +480,18 @@ void EditorProperty::_notification(int p_what) {
 					if (!is_layout_rtl()) {
 						rect.position.x += diff;
 					}
+				}
+
+				// Respect the left container's minimum width.
+				if (is_layout_rtl()) {
+					real_t current_left_container_size = size.x - (rect.position.x + rect.size.x);
+					if (current_left_container_size < left_container_ms.width) {
+						rect.size.x -= left_container_ms.width - current_left_container_size;
+					}
+				} else if (rect.position.x < left_container_ms.width) {
+					diff = left_container_ms.width - rect.position.x;
+					rect.position.x += diff;
+					rect.size.width -= diff;
 				}
 			}
 
@@ -490,7 +520,7 @@ void EditorProperty::_notification(int p_what) {
 				bottom_child_rect = bottom_rect;
 			}
 
-			Size2 rs = right_container->get_combined_minimum_size();
+			Size2 rs = right_container_ms;
 			rs.y = MAX(rs.y, rect.size.y);
 			if (is_layout_rtl()) {
 				fit_child_in_rect(right_container, Rect2(0, 0, rs.width, rs.y));
@@ -498,7 +528,7 @@ void EditorProperty::_notification(int p_what) {
 				fit_child_in_rect(right_container, Rect2(size.width - rs.width, 0, rs.width, rs.y));
 			}
 
-			Size2 ls = left_container->get_combined_minimum_size();
+			Size2 ls = left_container_ms;
 			real_t right_size = rect.size.x + rs.x;
 			ls.y = MAX(ls.y, rect.size.y);
 			if (is_layout_rtl()) {
@@ -850,6 +880,10 @@ void EditorProperty::set_doc_path(const String &p_doc_path) {
 
 void EditorProperty::set_internal(bool p_internal) {
 	internal = p_internal;
+}
+
+void EditorProperty::make_passthrough(bool p_passthrough) {
+	set_mouse_behavior_recursive(p_passthrough ? MOUSE_BEHAVIOR_DISABLED : MOUSE_BEHAVIOR_INHERITED);
 }
 
 void EditorProperty::update_property() {
@@ -1320,6 +1354,10 @@ HBoxContainer *EditorProperty::get_inline_container(InlineControlSide p_side) {
 }
 
 void EditorProperty::set_bottom_editor(Control *p_control) {
+	if (bottom_editor == p_control) {
+		return;
+	}
+
 	bottom_editor = p_control;
 	if (has_borders) {
 		_update_property_bg();

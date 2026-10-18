@@ -636,6 +636,20 @@ Ref<Image> DisplayServerWayland::clipboard_get_image() const {
 	return image;
 }
 
+bool DisplayServerWayland::clipboard_has_image() const {
+	MutexLock mutex_lock(wayland_thread.mutex);
+
+	return wayland_thread.selection_has_mime("image/png") ||
+			wayland_thread.selection_has_mime("image/jpeg") ||
+			wayland_thread.selection_has_mime("image/webp") ||
+			wayland_thread.selection_has_mime("image/svg+xml") ||
+			wayland_thread.selection_has_mime("image/bmp") ||
+			wayland_thread.selection_has_mime("image/x-tga") ||
+			wayland_thread.selection_has_mime("image/x-targa") ||
+			wayland_thread.selection_has_mime("image/ktx") ||
+			wayland_thread.selection_has_mime("image/x-exr");
+}
+
 void DisplayServerWayland::clipboard_set_primary(const String &p_text) {
 	MutexLock mutex_lock(wayland_thread.mutex);
 
@@ -1516,10 +1530,9 @@ void DisplayServerWayland::window_start_resize(DisplayServerEnums::WindowResizeE
 }
 
 void DisplayServerWayland::_window_update_hdr_state(WindowData &p_window) {
-	DisplayServerEnums::WindowID window_id = p_window.id;
-
 #if defined(RD_ENABLED)
 	if (rendering_context) {
+		DisplayServerEnums::WindowID window_id = p_window.id;
 		// The `display/window/hdr/request_hdr_output` project setting makes the main window "request" HDR.
 		// On Windows, this means enable HDR for the main window if it is on an HDR screen.
 		// Since all screens support HDR on Wayland, we use whether the window "prefers" HDR or not instead.
