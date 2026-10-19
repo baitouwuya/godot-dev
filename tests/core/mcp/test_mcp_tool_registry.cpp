@@ -319,4 +319,43 @@ TEST_CASE("[MCP][ToolRegistry] Validates structured tool results against output 
 	memdelete(invalid_provider);
 }
 
+TEST_CASE("[MCP][ToolRegistry] Introspection returns isolated definitions and schema-free summaries") {
+	MCPToolRegistry registry;
+	ToolProvider *provider = memnew(ToolProvider);
+	Dictionary definition = make_definition("first");
+	Dictionary annotations;
+	annotations["readOnlyHint"] = true;
+	definition["annotations"] = annotations;
+	REQUIRE(registry.register_tool(definition, callable_mp(provider, &ToolProvider::echo), provider) == OK);
+	REQUIRE(registry.register_tool(make_definition("second"), callable_mp(provider, &ToolProvider::echo), provider) == OK);
+
+	Dictionary described = registry.get_tool_definition("first");
+	CHECK(described == Dictionary(registry.get_tool_definitions()[0]));
+	Dictionary input_schema = described["inputSchema"];
+	input_schema["type"] = "string";
+	CHECK(String(Dictionary(registry.get_tool_definition("first")["inputSchema"])["type"]) == "object");
+	CHECK(registry.get_tool_definition("missing").is_empty());
+
+	const Array summaries = registry.get_tool_summaries();
+	REQUIRE(summaries.size() == 2);
+	Dictionary first = summaries[0];
+	CHECK(String(first["name"]) == "first");
+	CHECK(String(Dictionary(summaries[1])["name"]) == "second");
+	CHECK(first.size() == 3);
+	CHECK_FALSE(first.has("inputSchema"));
+	CHECK_FALSE(first.has("outputSchema"));
+	Dictionary exposed_annotations = first["annotations"];
+	exposed_annotations["readOnlyHint"] = false;
+	CHECK(bool(Dictionary(registry.get_tool_definition("first")["annotations"])["readOnlyHint"]));
+	CHECK(provider->call_count == 0);
+
+	CHECK(registry.unregister_tool("first"));
+	CHECK(registry.get_tool_definition("first").is_empty());
+	CHECK(registry.get_tool_summaries().size() == 1);
+	memdelete(provider);
+	CHECK(registry.get_tool_definition("second").is_empty());
+	CHECK(registry.get_tool_summaries().is_empty());
+	CHECK(registry.call_tool("second", Dictionary(), MCPToolCallContext()).status == MCPToolRegistry::CALL_TOOL_UNAVAILABLE);
+}
+
 } // namespace TestMCPToolRegistry

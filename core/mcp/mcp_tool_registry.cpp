@@ -238,6 +238,28 @@ bool MCPToolRegistry::has_tool(const StringName &p_name) const {
 	return entry && entry->handler.is_valid();
 }
 
+Dictionary MCPToolRegistry::get_tool_definition(const StringName &p_name) const {
+	const ToolEntry *entry = tools.getptr(p_name);
+	return entry && entry->handler.is_valid() ? entry->definition.duplicate(true) : Dictionary();
+}
+
+Array MCPToolRegistry::get_tool_summaries() const {
+	Array summaries;
+	for (const StringName &name : registration_order) {
+		const ToolEntry *entry = tools.getptr(name);
+		if (!entry || !entry->handler.is_valid()) {
+			continue;
+		}
+		Dictionary summary;
+		summary["name"] = String(name);
+		summary["description"] = entry->definition.get("description", String());
+		const Dictionary annotations = entry->definition.get("annotations", Dictionary());
+		summary["annotations"] = annotations.duplicate(true);
+		summaries.push_back(summary);
+	}
+	return summaries;
+}
+
 Array MCPToolRegistry::get_tool_definitions() const {
 	return _get_cached_tool_definitions().duplicate(true);
 }

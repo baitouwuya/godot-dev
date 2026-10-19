@@ -72,6 +72,9 @@ public:
 	int unregister_tools_for_owner(ObjectID p_owner_id);
 
 	bool has_tool(const StringName &p_name) const;
+	// Live, isolated introspection without copying the full schema catalog.
+	Dictionary get_tool_definition(const StringName &p_name) const;
+	Array get_tool_summaries() const;
 	Array get_tool_definitions() const;
 	PackedStringArray get_tool_names() const;
 	CallResult call_tool(const StringName &p_name, const Dictionary &p_arguments, const MCPToolCallContext &p_context) const;
