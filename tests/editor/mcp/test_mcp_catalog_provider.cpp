@@ -136,7 +136,8 @@ TEST_CASE("[MCP][Catalog] Empty search exhaustively pages the live registry") {
 		arguments["offset"] = offset;
 		const Dictionary result = _success(registry, "godot.catalog.search", arguments);
 		const Array matches = result["tools"];
-		for (const Dictionary &match : matches) {
+		for (const Variant &match_value : matches) {
+			const Dictionary match = match_value;
 			observed.push_back(match["name"]);
 		}
 		offset = result["nextOffset"];

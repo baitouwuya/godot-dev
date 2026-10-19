@@ -138,7 +138,8 @@ Dictionary search(const MCPToolRegistry &p_registry, const SearchOptions &p_opti
 	Array matches;
 	int total = 0;
 	const Array summaries = p_registry.get_tool_summaries();
-	for (const Dictionary &summary : summaries) {
+	for (const Variant &summary_value : summaries) {
+		const Dictionary summary = summary_value;
 		const String name = summary["name"];
 		const String description = summary["description"];
 		if (!name.begins_with(p_options.prefix) ||
