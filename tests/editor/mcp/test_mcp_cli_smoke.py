@@ -300,7 +300,7 @@ def check_persistent_async_job(
 def run_smoke(binary: str, timeout: int, keep_temporary_projects: bool) -> None:
     manifest_path = Path(__file__).parent / "data/mcp_tool_manifest.json"
     expected_tools = load_tool_manifest(manifest_path)
-    require(len(expected_tools) == 111, f"Tool manifest must contain 111 tools, found {len(expected_tools)}.")
+    require(len(expected_tools) == 113, f"Tool manifest must contain 113 tools, found {len(expected_tools)}.")
 
     temporary_root = Path(tempfile.mkdtemp(prefix="godot-mcp-python-smoke-"))
     project_a = temporary_root / "project-a"
@@ -378,7 +378,7 @@ def run_smoke(binary: str, timeout: int, keep_temporary_projects: bool) -> None:
             "same-project conflict replaced the owner record.",
         )
 
-        print("[6/9] Checking persistent stdio, JSON, 111-tool manifest, settings, classes, and scripts")
+        print("[6/9] Checking persistent stdio, JSON, 113-tool manifest, catalog, settings, classes, and scripts")
         check_persistent_stdio(runner, host_a, discovery_a)
         surface_requests = [
             request(2, "tools/list", {}),
@@ -392,6 +392,15 @@ def run_smoke(binary: str, timeout: int, keep_temporary_projects: bool) -> None:
             ),
             tool_call(9, "godot.gdextension.build", {"extensionPath": "res://missing.gdextension"}),
             tool_call(10, "godot.gdextension.build", {"extensionPath": "res://smoke.gdextension"}),
+            tool_call(11, "godot.catalog.search", {"prefix": "godot.class.", "limit": 1}),
+            tool_call(12, "godot.catalog.describe", {"name": "godot.class.search"}),
+            tool_call(13, "godot.catalog.search", {"prefix": "godot.class.", "offset": 1, "limit": 1}),
+            tool_call(14, "godot.catalog.describe", {"name": "godot.missing.tool"}),
+            tool_call(15, "godot.catalog.search", {"limit": 0}),
+            tool_call(16, "godot.class.search", {"query": "Node", "source": "native", "limit": 1}),
+            tool_call(17, "godot.catalog.search", {"limit": 50}),
+            tool_call(18, "godot.catalog.search", {"offset": 50, "limit": 50}),
+            tool_call(19, "godot.catalog.search", {"offset": 100, "limit": 50}),
         ]
         write_text(
             project_a / "smoke.gdextension",
@@ -415,7 +424,7 @@ windows.debug = "res://smoke.dll"
         )
         require(
             actual_tools == expected_tools,
-            "tools/list did not match the ordered 111-tool manifest: "
+            "tools/list did not match the ordered 113-tool manifest: "
             f"actualCount={len(actual_tools)}, expectedCount={len(expected_tools)}, "
             f"firstMismatch={first_mismatch}, "
             f"actual={actual_tools[first_mismatch : first_mismatch + 3]!r}, "
@@ -438,6 +447,39 @@ windows.debug = "res://smoke.dll"
                 )
             require(annotations["openWorldHint"] is False, f"Tool {tool.get('name')} must declare openWorldHint=false.")
         require(surface[2]["result"].get("isError") is not True, "tools/list returned a tool error.")
+        catalog = structured_result(surface, 11, "catalog/search")
+        require(catalog.get("total") == 2 and catalog.get("nextOffset") == 1, "catalog search pagination failed.")
+        require(
+            [entry.get("name") for entry in catalog.get("tools", [])] == ["godot.class.search"],
+            "catalog search returned the wrong first match.",
+        )
+        require(
+            set(catalog["tools"][0]) == {"name", "description", "annotations"},
+            "catalog search must return summaries without schemas.",
+        )
+        described = structured_result(surface, 12, "catalog/describe")
+        require(
+            described.get("tool") == next(tool for tool in tools_list if tool["name"] == "godot.class.search"),
+            "catalog describe must preserve the complete tools/list definition.",
+        )
+        catalog_tail = structured_result(surface, 13, "catalog/search page 2")
+        require(catalog_tail.get("nextOffset") == -1, "catalog search did not terminate pagination.")
+        require(
+            [entry.get("name") for entry in catalog_tail.get("tools", [])] == ["godot.class.get_documentation"],
+            "catalog search returned the wrong second match.",
+        )
+        for request_id, code in ((14, "TOOL_NOT_FOUND"), (15, "INVALID_ARGUMENTS")):
+            failure = tool_result(surface, request_id, "catalog error")
+            require(failure.get("isError") is True, "catalog error was not a tool error.")
+            require(failure.get("structuredContent", {}).get("error", {}).get("code") == code, "wrong catalog error.")
+        structured_result(surface, 16, "canonical class/search after discovery")
+        discovered_names = []
+        for request_id, next_offset in ((17, 50), (18, 100), (19, -1)):
+            page = structured_result(surface, request_id, "catalog enumeration")
+            require(page.get("total") == len(expected_tools), "catalog total differs from tools/list.")
+            require(page.get("nextOffset") == next_offset, "catalog enumeration returned an incorrect offset.")
+            discovered_names.extend(entry.get("name") for entry in page.get("tools", []))
+        require(discovered_names == expected_tools, "catalog enumeration lost or reordered tools.")
         setting = structured_result(surface, 5, "project/get_setting")
         require(setting.get("value") == "MCP Python Smoke A", "project/get_setting returned the wrong value.")
         require(

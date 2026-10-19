@@ -111,6 +111,8 @@
 		"godot.gdscript.references",
 		"godot.gdscript.signature_help",
 		"godot.gdscript.rename",
-		"godot.gdscript.apply_workspace_edit"
+		"godot.gdscript.apply_workspace_edit",
+		"godot.catalog.search",
+		"godot.catalog.describe"
 	]
 }

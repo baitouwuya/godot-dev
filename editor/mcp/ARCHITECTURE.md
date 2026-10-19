@@ -63,6 +63,12 @@ The Tool Registry is the runtime source of truth for definitions and handlers. E
 
 `tests/editor/mcp/data/mcp_tool_manifest.json` is an ordered compatibility snapshot, not generated registration code. The static manifest validator checks its shape. The cross-platform smoke test compares it with `tools/list` from a real running Host; that comparison detects missing, added, or reordered tools. Any tool-surface change must update the manifest, its expected count, and the real stdio smoke in the same change.
 
+The catalog Provider reads live summaries and individual definitions from that
+same Registry. It has no copied catalog or session-owned state and cannot invoke
+other tools. Search returns schema-free summaries; describe returns a complete
+definition. Full advertisement and canonical dispatch remain unchanged. The
+staged compact-advertisement design is in [PROGRESSIVE_DISCLOSURE.md](PROGRESSIVE_DISCLOSURE.md).
+
 JSON integers remain integers. Values that can exceed interoperable JSON integer precision, such as runtime object IDs, use decimal strings. Godot-only Variant values use the explicit MCP Variant codec rather than private string prefixes.
 
 Successful modern-protocol responses keep `structuredContent` authoritative. Small responses also mirror JSON in `content` for older clients; large responses use a bounded summary to avoid doubling payload size.

@@ -32,6 +32,7 @@
 
 #include "editor/mcp/providers/mcp_autoload_provider.h"
 #include "editor/mcp/providers/mcp_automation_provider.h"
+#include "editor/mcp/providers/mcp_catalog_provider.h"
 #include "editor/mcp/providers/mcp_class_provider.h"
 #include "editor/mcp/providers/mcp_debug_capture.h"
 #include "editor/mcp/providers/mcp_debug_event_store.h"
@@ -108,6 +109,7 @@ Error MCPBuiltinFeatures::initialize() {
 #if defined(MODULE_GDSCRIPT_ENABLED) && !defined(GDSCRIPT_NO_LSP)
 	gdscript_provider = memnew(MCPGDScriptProvider(gdscript_session_manager));
 #endif
+	catalog_provider = memnew(MCPCatalogProvider);
 
 	LocalVector<MCPEditorFeature *> builtin_feature_order{
 		automation_provider,
@@ -133,6 +135,7 @@ Error MCPBuiltinFeatures::initialize() {
 	builtin_feature_order.push_back(script_provider);
 	builtin_feature_order.push_back(gdscript_provider);
 #endif
+	builtin_feature_order.push_back(catalog_provider);
 	for (MCPEditorFeature *feature : builtin_feature_order) {
 		if (feature_set.add_feature(feature) != OK) {
 			_reset();
@@ -208,6 +211,7 @@ void MCPBuiltinFeatures::clear_runtime_requests() {
 
 void MCPBuiltinFeatures::_reset() {
 	feature_set.clear();
+	delete_owned(catalog_provider);
 	clear_runtime_requests();
 	stop_debug_capture();
 	if (runtime_observation_debugger_plugin.is_valid()) {

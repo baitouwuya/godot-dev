@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_MANIFEST = Path("tests/editor/mcp/data/mcp_tool_manifest.json")
-DEFAULT_EXPECTED_TOOL_COUNT = 111
+DEFAULT_EXPECTED_TOOL_COUNT = 113
 TOOL_NAME = re.compile(r"godot(?:\.[a-z][a-z0-9_]*){2,}")
 
 

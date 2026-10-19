@@ -36,6 +36,7 @@
 
 class MCPAutoloadProvider;
 class MCPAutomationProvider;
+class MCPCatalogProvider;
 class MCPClassProvider;
 class MCPDebugCapture;
 class MCPDebugEventStore;
@@ -87,6 +88,7 @@ class MCPBuiltinFeatures {
 	MCPHarnessProvider *harness_provider = nullptr;
 	MCPInputMapProvider *input_map_provider = nullptr;
 	MCPTraceService *trace_service = nullptr;
+	MCPCatalogProvider *catalog_provider = nullptr;
 	bool initialized = false;
 
 	void _reset();

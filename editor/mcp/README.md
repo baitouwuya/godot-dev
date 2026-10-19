@@ -6,6 +6,26 @@ Every advertised tool includes an object `outputSchema` and the standard MCP `re
 
 The implementation and extension boundaries are documented in [ARCHITECTURE.md](ARCHITECTURE.md). Contributors adding a Feature, Provider, service, or public tool should follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Discover Tool Definitions
+
+`godot.catalog.search` returns bounded tool summaries without schemas. Use an
+empty query to browse, or combine a case-sensitive name `prefix` such as
+`godot.runtime.` with a case-insensitive `query` over names and descriptions.
+`limit` defaults to 20 and accepts 1 through 50. Continue with the returned
+`nextOffset`; -1 means the results are exhausted. Pages reflect the live registry,
+so restart enumeration if registrations change.
+
+`godot.catalog.describe` accepts an exact `name` and returns its complete current
+definition in `structuredContent.tool`. Invoke that canonical name through the
+ordinary `tools/call` method. Discovery preserves the original schemas, behavior
+annotations, validation and tracing. Unknown or unavailable names produce the
+catalog tool error `TOOL_NOT_FOUND`.
+
+The full build still advertises every tool through `tools/list`: the original
+111 tools followed by these two catalog tools. Compact advertisement is not yet
+implemented. The proposed negotiated mode, client requirements, complete mapping
+and verification plan are in [PROGRESSIVE_DISCLOSURE.md](PROGRESSIVE_DISCLOSURE.md).
+
 ## Start or Reuse a Project Host
 
 A Host belongs to the project editor process, not to an individual tool call or stdio client. Reuse it across operations. A tool completing, a bridge reaching EOF, or an MCP session ending does not close the editor or the running game.
@@ -267,7 +287,7 @@ py -3 tests/editor/mcp/test_mcp_cli_smoke.py `
   --binary bin/godot.windows.editor.dev.x86_64.console.exe
 ```
 
-The Python test creates two temporary projects and verifies explicit-path errors, CLI/editor conflicts, ordinary editor behavior, public discovery fields, independent multi-project routing, same-project Host exclusion, JSON-only stdio stdout, the complete ordered 111-tool MCP surface, native settings and script/class operations, structural Node edits with undo/redo and explicit scene save, runtime play/state/stop, runtime warnings and errors, and project isolation. Temporary editor plugins request clean Host shutdown; forced termination is used only as a timeout fallback.
+The Python test creates two temporary projects and verifies explicit-path errors, CLI/editor conflicts, ordinary editor behavior, public discovery fields, independent multi-project routing, same-project Host exclusion, JSON-only stdio stdout, the complete ordered 113-tool MCP surface, catalog enumeration and exact definitions, native settings and script/class operations, structural Node edits with undo/redo and explicit scene save, runtime play/state/stop, runtime warnings and errors, and project isolation. Temporary editor plugins request clean Host shutdown; forced termination is used only as a timeout fallback.
 
 The Windows PowerShell smoke test remains available for Windows-specific extension coverage. It requires PowerShell 7.2 or newer:
 
