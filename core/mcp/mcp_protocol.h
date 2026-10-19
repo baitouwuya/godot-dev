@@ -80,6 +80,7 @@ public:
 private:
 	MCPToolRegistry *tool_registry = nullptr;
 	SessionState session_state = SESSION_UNINITIALIZED;
+	bool compact_tool_list = false;
 	String protocol_version;
 	String server_name = "godot-mcp";
 	String server_version = "0.1.0";
@@ -98,6 +99,7 @@ private:
 	bool _attach_project_metadata(Dictionary &r_result) const;
 	bool _is_valid_request_id(const Variant &p_id) const;
 	bool _is_batch_supported() const;
+	bool _can_use_compact_tool_list() const;
 	String _negotiate_protocol_version(const String &p_requested) const;
 };
 

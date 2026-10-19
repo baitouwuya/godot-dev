@@ -73,10 +73,10 @@ static Dictionary make_request(const String &p_method, const Variant &p_id, cons
 	return request;
 }
 
-static Dictionary make_initialize_request(const String &p_version, const Variant &p_id = 1) {
+static Dictionary make_initialize_request(const String &p_version, const Variant &p_id = 1, const Dictionary &p_capabilities = Dictionary()) {
 	Dictionary params;
 	params["protocolVersion"] = p_version;
-	params["capabilities"] = Dictionary();
+	params["capabilities"] = p_capabilities;
 	Dictionary client_info;
 	client_info["name"] = "test-client";
 	client_info["version"] = "1.0";
@@ -281,6 +281,131 @@ TEST_CASE("[MCP][Protocol] Keeps legacy batch compatibility version-scoped") {
 	REQUIRE(legacy_result.has_response());
 	const Array responses = legacy_result.response;
 	CHECK_EQ(responses.size(), 1);
+}
+
+static Dictionary discovery_capabilities(const Variant &p_version) {
+	Dictionary discovery;
+	discovery["version"] = p_version;
+	Dictionary experimental;
+	experimental["io.godot/tool-discovery"] = discovery;
+	Dictionary capabilities;
+	capabilities["experimental"] = experimental;
+	return capabilities;
+}
+
+static PackedStringArray compact_tool_names() {
+	return PackedStringArray{ "godot.catalog.search", "godot.catalog.describe", "godot.editor.get_state", "godot.runtime.get_state", "godot.project.inspect" };
+}
+
+static void register_discovery_tools(MCPToolRegistry &p_registry, ToolProvider &p_provider) {
+	PackedStringArray names = compact_tool_names();
+	names.reverse(); // Compact order must not depend on registration order.
+	names.push_back("echo");
+	for (const String &name : names) {
+		Dictionary definition;
+		definition["name"] = name;
+		REQUIRE(p_registry.register_tool(definition, callable_mp(&p_provider, &ToolProvider::echo), &p_provider) == OK);
+	}
+}
+
+static Array listed_tools(MCPProtocol &p_protocol) {
+	const Dictionary response = p_protocol.dispatch(make_request("tools/list", 2)).response;
+	REQUIRE_FALSE(response.has("error"));
+	return Dictionary(response["result"])["tools"];
+}
+
+static bool initialize_discovery(MCPProtocol &p_protocol, const Dictionary &p_capabilities) {
+	const Dictionary response = p_protocol.dispatch(make_initialize_request(MCPProtocol::PROTOCOL_VERSION_LATEST, 1, p_capabilities)).response;
+	REQUIRE_FALSE(response.has("error"));
+	const Dictionary capabilities = Dictionary(response["result"])["capabilities"];
+	const Dictionary experimental = capabilities.get("experimental", Dictionary());
+	const Dictionary discovery = experimental.get("io.godot/tool-discovery", Dictionary());
+	Dictionary initialized;
+	initialized["jsonrpc"] = "2.0";
+	initialized["method"] = "notifications/initialized";
+	p_protocol.dispatch(initialized);
+	if (discovery.is_empty()) {
+		CHECK_FALSE(capabilities.has("experimental"));
+		return false;
+	}
+	CHECK(discovery.size() == 1);
+	CHECK(int(discovery["version"]) == 1);
+	return true;
+}
+
+TEST_CASE("[MCP][Protocol] Discovery negotiation falls back without changing full advertisement") {
+	MCPToolRegistry registry;
+	ToolProvider provider;
+	register_discovery_tools(registry, provider);
+	Array unsupported;
+	unsupported.push_back(Dictionary());
+	for (const Variant &version : Array{ Variant(), Variant(true), Variant("1"), Variant(0), Variant(2), Variant(1.5), Variant(Array()) }) {
+		unsupported.push_back(discovery_capabilities(version));
+	}
+	for (const Variant &value : Array{ Variant(), Variant(true), Variant("invalid"), Variant(Array()), Variant(Dictionary()) }) {
+		Dictionary capabilities;
+		capabilities["experimental"] = value;
+		unsupported.push_back(capabilities);
+		Dictionary experimental;
+		experimental["io.godot/tool-discovery"] = value;
+		capabilities = Dictionary();
+		capabilities["experimental"] = experimental;
+		unsupported.push_back(capabilities);
+	}
+	for (const Variant &capabilities : unsupported) {
+		MCPProtocol protocol(&registry);
+		CHECK_FALSE(initialize_discovery(protocol, capabilities));
+		CHECK(listed_tools(protocol) == registry.get_tool_definitions());
+	}
+	CHECK(provider.call_count == 0);
+}
+
+TEST_CASE("[MCP][Protocol] Compact sessions advertise five exact definitions and retain canonical dispatch") {
+	MCPToolRegistry registry;
+	ToolProvider provider;
+	register_discovery_tools(registry, provider);
+	const Array full_definitions = registry.get_tool_definitions();
+	MCPProtocol full(&registry);
+	CHECK_FALSE(initialize_discovery(full, Dictionary()));
+	for (const Variant &version : Array{ Variant(1), Variant(1.0) }) {
+		MCPProtocol compact(&registry);
+		CHECK(initialize_discovery(compact, discovery_capabilities(version)));
+		const Array definitions = listed_tools(compact);
+		const PackedStringArray names = compact_tool_names();
+		REQUIRE(definitions.size() == names.size());
+		for (int i = 0; i < names.size(); i++) {
+			CHECK(Dictionary(definitions[i]) == registry.get_tool_definition(names[i]));
+		}
+		Dictionary params;
+		params["name"] = "echo";
+		const Dictionary called = compact.dispatch(make_request("tools/call", 3, params)).response;
+		CHECK_FALSE(called.has("error"));
+		CHECK_FALSE(bool(Dictionary(called["result"]).get("isError", false)));
+		params["name"] = "missing";
+		CHECK(get_error_code(compact.dispatch(make_request("tools/call", 4, params))) == MCPProtocol::INVALID_PARAMS);
+		CHECK(listed_tools(compact) == definitions);
+		CHECK(listed_tools(full) == full_definitions);
+		CHECK(registry.get_tool_definitions() == full_definitions);
+		compact.reset_session();
+		CHECK_FALSE(initialize_discovery(compact, Dictionary()));
+		CHECK(listed_tools(compact) == full_definitions);
+	}
+	CHECK(provider.call_count == 2);
+}
+
+TEST_CASE("[MCP][Protocol] Discovery requires all compact tools and detects their removal") {
+	MCPToolRegistry registry;
+	ToolProvider provider;
+	register_discovery_tools(registry, provider);
+	MCPProtocol compact(&registry);
+	CHECK(initialize_discovery(compact, discovery_capabilities(1)));
+	CHECK(registry.unregister_tool("godot.catalog.describe"));
+	CHECK(get_error_code(compact.dispatch(make_request("tools/list", 2))) == MCPProtocol::INTERNAL_ERROR);
+	compact.reset_session();
+	CHECK_FALSE(initialize_discovery(compact, discovery_capabilities(1)));
+	CHECK(listed_tools(compact) == registry.get_tool_definitions());
+	MCPProtocol unconfigured;
+	CHECK_FALSE(initialize_discovery(unconfigured, discovery_capabilities(1)));
 }
 
 } // namespace TestMCPProtocol

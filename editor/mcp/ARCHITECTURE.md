@@ -66,8 +66,24 @@ The Tool Registry is the runtime source of truth for definitions and handlers. E
 The catalog Provider reads live summaries and individual definitions from that
 same Registry. It has no copied catalog or session-owned state and cannot invoke
 other tools. Search returns schema-free summaries; describe returns a complete
-definition. Full advertisement and canonical dispatch remain unchanged. The
-staged compact-advertisement design is in [PROGRESSIVE_DISCLOSURE.md](PROGRESSIVE_DISCLOSURE.md).
+definition. Canonical dispatch remains unchanged. Each `MCPProtocol` owns one
+negotiated advertisement flag, cleared by session reset. Initialize acknowledges
+`experimental.io.godot/tool-discovery` version 1 only for an explicit numeric
+version 1 request with all five compact tools present and callable. Missing,
+malformed, unsupported, or unavailable negotiation keeps full advertisement.
+The version 1 protocol contract lists five registry names: catalog search and
+describe, editor state, runtime state, and project inspect. These are names only;
+core has no concrete Provider dependency. Compact listing copies just those five
+live definitions in contract order. Losing one after negotiation produces a
+protocol internal error requiring a new session, never a partial compact list.
+
+This flag affects only `tools/list`; it does not filter registration, discovery,
+authorization or `tools/call`. Describe cannot change it or the advertised list.
+Full clients keep the original listing path and order. The manifest and static
+validator remain the 113-tool full-build contract; compact ordering is asserted
+separately by protocol tests and the real CLI smoke. No revision cache or
+list-change notification is introduced. Details and measurement instructions
+are in [PROGRESSIVE_DISCLOSURE.md](PROGRESSIVE_DISCLOSURE.md).
 
 JSON integers remain integers. Values that can exceed interoperable JSON integer precision, such as runtime object IDs, use decimal strings. Godot-only Variant values use the explicit MCP Variant codec rather than private string prefixes.
 

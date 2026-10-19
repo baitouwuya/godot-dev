@@ -2,8 +2,9 @@
 
 Design delivered in chat before source edits, against
 `c173101c043a57c019302d4486dafb31629a9d38`. Stage 1 adds catalog inspection;
-compact advertisement and client integration remain proposed. No capability is
-removed. Runtime behavior and performance remain pending host verification.
+stage 2 now implements opt-in compact advertisement and host measurement support.
+Client integration and revision-aware caching remain proposed. No capability is
+removed. Stage 2 runtime behavior and savings remain pending host verification.
 
 ## Inventory and cost
 
@@ -16,8 +17,9 @@ ARCHITECTURE, CONTRIBUTING, and the relevant registry, Provider and CLI tests.
 registration and reverse cleanup. Each Provider uses `MCPToolUtils::register_tools`
 to install definitions and handlers into the single `MCPToolRegistry`.
 Registration validates schemas, normalizes definitions, and invalidates the
-definition cache. `MCPProtocol` returns all cached definitions, deeply copied, on
-every `tools/list`; there is no filtering or pagination. Each Host session owns
+definition cache. In the baseline and current full mode, `MCPProtocol` returns
+all cached definitions, deeply copied, on every `tools/list`; there is no
+pagination. Each Host session owns
 its protocol. HTTP and stdio do not own another business registry.
 
 The baseline full build has 111 tools:
@@ -97,7 +99,7 @@ Invocation remains the existing protocol contract:
 Use the described schema to form arguments. There is no generic invoke wrapper.
 Canonical names remain visible to client authorization and ordinary tracing.
 
-## Proposed compact mode, not implemented in stage 1
+## Compact mode implemented in stage 2
 
 Always advertise `godot.catalog.search`, `godot.catalog.describe`,
 `godot.editor.get_state`, `godot.runtime.get_state`, and `godot.project.inspect`.
@@ -111,12 +113,39 @@ Compact mode requires an explicit Godot extension in initialize capabilities:
 {"experimental":{"io.godot/tool-discovery":{"version":1}}}
 ```
 
-The server must acknowledge the same extension in its capabilities before the
-client uses compact mode. A supporting client reads structuredContent, loads the
+The server acknowledges the same extension in its capabilities only for numeric
+version 1 (integer 1 or floating-point 1.0), and only if all five named tools are
+currently registered and callable. Missing or malformed nested objects, absent
+version, strings, booleans, or unsupported versions fall back to the unchanged
+full advertisement without acknowledging the extension. Existing validation of
+the required initialize envelope remains unchanged. The client must observe the
+acknowledgement before using compact mode. A supporting client reads structuredContent, loads the
 definition returned by describe into its model's callable tool set, and forwards
 canonical calls. Describe does not mutate the server's advertised list.
 Ordinary clients, including clients that cannot load definitions, keep full
 advertisement. Do not assume ordinary MCP clients support this extension.
+
+The negotiated flag belongs to `MCPProtocol`, not to the registry or Provider,
+and is cleared by `reset_session`. Full and compact sessions can share a registry.
+Compact listing deep-copies exactly the five live definitions in the order above;
+full listing retains the original path and registration order. No call dispatch,
+schema validation, error-status mapping, or trace-observer path is changed.
+If a core tool disappears after negotiation, listing returns `INTERNAL_ERROR`
+and asks for a new session rather than returning a partial list. Negotiation of
+that new session falls back to full mode if the core is still incomplete.
+
+The orienting tools were inspected and retained without changes. Each has a
+closed empty input schema and a structured object output schema:
+
+- Editor state supplies the current scene, unsaved scenes, open/unsaved scripts,
+  and undo/redo availability.
+- Runtime state supplies playing state, scene/process identity, and debugger
+  sessions with generation information when available.
+- Project inspect supplies the configuration path/revision, file existence,
+  managed/ordinary setting counts, and dedicated configuration tool names.
+
+Their existing summaries accurately describe these outputs. They orient a client
+without introducing new tool names or changing existing result schemas.
 
 Stage 1 preserves the original 111 definitions and order, appending two catalog
 tools for 113 full-build definitions. Default advertisement is therefore larger
@@ -132,7 +161,7 @@ or discovery input.
 | Wrong editor/runtime tool selected | Preserve namespaces, descriptions and annotations; describe unfamiliar tools before calling. |
 | Missing capability or weak lexical search | Empty-query prefix browsing and exhaustive pagination; explicit totals and end marker; tests compare enumeration with the whole registry. |
 | Stale discovery | Query live entries, exclude invalid handlers, refresh after reconnect/schema errors, and always validate invocation against current definitions. |
-| Registry changes between pages | Pages are live, not an atomic snapshot. Restart enumeration after registration changes. Add revision-aware consistency before compact-mode caching. |
+| Registry changes between pages | Pages are live, not an atomic snapshot. Restart enumeration after registration changes. No cache is added by compact mode; revision-aware caching remains deferred. |
 | Extra round trips | Unknown tool: search, describe, call. Known name skips search. Host/session-scoped caching needs invalidation; measure end-to-end workloads before rollout. |
 | Client cannot invoke discovered tools | Negotiate compact mode explicitly; keep full mode as the default and fallback. |
 | Weakened schema validation or authorization | Discovery reads definitions only; canonical calls retain current validation, status mapping and client policy. No invoke wrapper. |
@@ -152,13 +181,18 @@ cleanup. Session removal and shutdown have no retained catalog work to cancel.
    Provider and schemas, preserving full advertisement and direct invocation.
    Add focused C++ tests and real-stdio smoke assertions. This is the implemented
    source stage; execution remains pending host verification.
-2. Add revision-aware discovery consistency and negotiated compact advertisement.
-   Test full/compact sessions side by side, optional builds, client definition
-   loading, reconnects and canonical dispatch. Proposed only.
-3. Measure actual schema bytes and workflow round trips on the host, then tune
-   the core and search guidance using evidence. Proposed only.
+2. Implement negotiated compact advertisement without adding a schema cache.
+   Protocol tests cover fallback, acknowledgement, exact definitions/order,
+   shared-registry sessions, canonical dispatch, reset, and a missing core tool.
+   Catalog tests cover real describe calls in both modes without list mutation.
+   The CLI smoke checks the same contract against a live Host and calls all three
+   orienting tools. Source implemented; execution remains host-pending.
+3. Run the supplied payload measurement on the host, measure workflow round trips,
+   then tune the core and search guidance using evidence. Revision-aware discovery
+   consistency, cached client definition loading, and client integration remain
+   proposed; this stage does not promise cached definitions remain current.
 
-Intentional fixture changes: append catalog names to
+Stage 1 fixture changes: append catalog names to
 `tests/editor/mcp/data/mcp_tool_manifest.json`; change the static validator and
 CLI smoke's expected count to 113; extend the smoke with discovery, exact schema
 equality, exhaustive enumeration, errors and canonical calls. Extend
@@ -167,12 +201,49 @@ equality, exhaustive enumeration, errors and canonical calls. Extend
 description completeness, errors, registration rollback and cleanup. Existing
 domain assertions and fixtures stay intact.
 
-Required host gate: focused C++ registry/catalog tests, complete `[MCP]*` suite,
+Stage 2 leaves `tests/editor/mcp/data/mcp_tool_manifest.json` and
+`misc/scripts/validate_mcp_tool_manifest.py` unchanged. They still describe and
+validate all 113 registered full-build tools in their existing order. No tool is
+added or removed. Compact mode has separate exact five-name assertions in C++
+and Python; the complete baseline mapping below is preserved.
+
+### Host payload comparison
+
+From the checkout on the host, with `$EditorBinary` pointing at the new editor
+and `$ProjectPath` pointing at an existing project inside this checkout already
+running an MCP Host from that build:
+
+```powershell
+py -3 tests/editor/mcp/test_mcp_cli_smoke.py --binary "$EditorBinary" --measure-advertisement --project "$ProjectPath"
+```
+
+This opens three sequential stdio sessions (full, unsupported version 2, compact
+version 1) against the same Host instance. It starts no editor, changes no project
+content, and invokes only read-only tools. It validates negotiation, exact
+definitions, hidden canonical calls, orienting tools, and list stability, then
+prints JSON with protocol version, binary path, instance ID, tool counts and:
+
+- `toolsListResponseBytes`: UTF-8 bytes of the actual JSON-RPC response line for
+  `tools/list` request ID 2, excluding the line terminator and transport headers.
+- `toolsListResultBytes`: UTF-8 bytes of the result object reserialized using
+  Python `json.dumps(ensure_ascii=False, separators=(",", ":"))`.
+- `summedDefinitionBytes`: sum of the UTF-8 sizes of the individual definitions
+  using the same Python serializer, excluding the array and response envelope.
+
+The primary comparison is full versus compact `toolsListResponseBytes` from this
+same run. For the earlier host-reported baseline of 111 tools and 210,575 result
+bytes, compare result bytes only after confirming the same serializer and byte
+boundary; raw response bytes include the JSON-RPC envelope and cannot be compared
+directly to that result-only number. The current full mode also contains the two
+stage 1 catalog tools. No payload counts, timings, or savings were measured in
+the VM. End-to-end discovery round-trip cost and client behavior remain unmeasured.
+
+Required host gate: focused C++ protocol/registry/catalog tests, complete `[MCP]*` suite,
 real CLI and trace smokes, SCons configuration check, and the documented MCP
 enabled/disabled, SCU/non-SCU and debug-template build matrix. No execution-based
 conclusion is established merely by source inspection or static validators.
 
-VM verification record: the dependency, build-surface and 113-tool manifest
+Stage 1 historical VM verification record: the dependency, build-surface and 113-tool manifest
 validators passed; all 27 Python unit tests for those validators passed. Python
 syntax, the unchanged 111-entry manifest prefix, the complete mapping below,
 header/file-format scripts and `git diff --check` were checked locally. No C++
@@ -181,6 +252,12 @@ check could not start SCons because that executable is unavailable. Its first
 attempt created an automatically cleaned profile in the OS temporary directory;
 this was a temporary-file scope deviation. Subsequent test temporary directories
 were explicitly placed inside this checkout. No other checkout was accessed.
+
+Stage 2 VM work is limited to targeted source inspection, edits and diff review.
+No compiler, SCons, test suite, editor, or measurement command was run for stage 2.
+Static validators, Python formatting/syntax gates, the focused C++ suites and
+the complete suite, CLI/trace smokes, optional build configurations, and payload
+measurement all remain pending host verification. C++ tests require `tests=yes`.
 
 The branch uses explicit per-command commit identity `Codex <codex@localhost>`
 because the VM has no Git author configured; repository/global configuration was
@@ -193,7 +270,7 @@ describe the exact name, then use canonical `tools/call`. Core rows also remain
 searchable. All rows continue to be advertised directly in stage 1 and in full
 mode. No canonical name, arguments or result shape is changed.
 
-| Existing tool | Provider | Search prefix | Proposed exposure |
+| Existing tool | Provider | Search prefix | Compact-mode exposure |
 | --- | --- | --- | --- |
 | `godot.automation.batch` | automation | `godot.automation.` | Search -> describe -> canonical call |
 | `godot.class.search` | class | `godot.class.` | Search -> describe -> canonical call |

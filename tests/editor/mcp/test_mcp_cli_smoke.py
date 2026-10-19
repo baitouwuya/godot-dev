@@ -37,6 +37,15 @@ func get_value() -> int:
 \treturn value
 """
 
+TOOL_DISCOVERY_EXTENSION = "io.godot/tool-discovery"
+COMPACT_TOOL_NAMES = [
+    "godot.catalog.search",
+    "godot.catalog.describe",
+    "godot.editor.get_state",
+    "godot.runtime.get_state",
+    "godot.project.inspect",
+]
+
 
 def write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -297,6 +306,111 @@ def check_persistent_async_job(
         parse_jsonrpc_responses(bridge.finish(), range(1, last_id + 1), "persistent async performance session")
 
 
+def check_discovery_advertisement(
+    runner: ProcessRunner,
+    project: Path,
+    protocol_version: str,
+    expected_definitions: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, Any]:
+    full_definitions: list[dict[str, Any]] = []
+    measurements: dict[str, Any] = {"protocolVersion": protocol_version}
+    for mode, capabilities in (
+        ("full", {}),
+        ("unsupported", {"experimental": {TOOL_DISCOVERY_EXTENSION: {"version": 2}}}),
+        ("compact", {"experimental": {TOOL_DISCOVERY_EXTENSION: {"version": 1}}}),
+    ):
+        with runner.start_stdio(project, f"{mode} discovery advertisement") as bridge:
+            initialized = bridge.exchange(
+                request(
+                    1,
+                    "initialize",
+                    {
+                        "protocolVersion": protocol_version,
+                        "capabilities": capabilities,
+                        "clientInfo": {"name": "mcp-discovery-smoke", "version": "1"},
+                    },
+                )
+            )
+            require("result" in initialized, f"{mode} initialize failed.")
+            server_capabilities = initialized["result"]["capabilities"]
+            acknowledgement = server_capabilities.get("experimental", {}).get(TOOL_DISCOVERY_EXTENSION)
+            if mode == "compact":
+                require(acknowledgement == {"version": 1}, "Compact discovery was not acknowledged.")
+            else:
+                require(acknowledgement is None, f"{mode} session unexpectedly acknowledged discovery.")
+            bridge.send(notification("notifications/initialized", {}))
+            before = bridge.exchange(request(2, "tools/list", {}))
+            require("result" in before and isinstance(before["result"].get("tools"), list), "Invalid tools/list.")
+            definitions = before["result"]["tools"]
+            if mode == "full":
+                full_definitions = definitions
+                if expected_definitions is not None:
+                    require(definitions == expected_definitions, "Full advertisement changed across sessions.")
+            elif mode == "unsupported":
+                require(
+                    definitions == full_definitions, "Unsupported discovery must preserve full definitions and order."
+                )
+            else:
+                require([tool["name"] for tool in definitions] == COMPACT_TOOL_NAMES, "Incorrect compact tool list.")
+                by_name = {tool["name"]: tool for tool in full_definitions}
+                require(definitions == [by_name[name] for name in COMPACT_TOOL_NAMES], "Compact definitions changed.")
+                require("godot.class.search" not in COMPACT_TOOL_NAMES, "Hidden-call target must not be advertised.")
+
+            described = bridge.exchange(tool_call(3, "godot.catalog.describe", {"name": "godot.class.search"}))
+            definition = structured_result({3: described}, 3, f"{mode} describe")["tool"]
+            require(
+                definition == next(tool for tool in full_definitions if tool["name"] == "godot.class.search"),
+                f"{mode} describe changed the hidden definition.",
+            )
+            after_describe = bridge.exchange(request(4, "tools/list", {}))
+            require(after_describe.get("result") == before["result"], f"{mode} describe changed advertisement.")
+            called = bridge.exchange(
+                tool_call(5, "godot.class.search", {"query": "Node", "source": "native", "limit": 1})
+            )
+            structured_result({5: called}, 5, f"{mode} canonical hidden call")
+            for request_id, name in enumerate(COMPACT_TOOL_NAMES[2:], start=6):
+                oriented = bridge.exchange(tool_call(request_id, name, {}))
+                structured_result({request_id: oriented}, request_id, f"{mode} {name}")
+            searched = bridge.exchange(tool_call(9, "godot.catalog.search", {"prefix": "godot.class."}))
+            matches = structured_result({9: searched}, 9, f"{mode} search")["tools"]
+            require(any(tool["name"] == "godot.class.search" for tool in matches), "Discovery lost a hidden tool.")
+            final_list = bridge.exchange(request(10, "tools/list", {}))
+            require(final_list.get("result") == before["result"], f"{mode} calls changed advertisement.")
+            completed = bridge.finish()
+        require(completed.returncode == 0, f"{mode} bridge failed: {describe_command_result(completed)}")
+        # read_response already validates UTF-8. Exclude only the stdio line terminator.
+        list_line = next(
+            line.removesuffix("\r")
+            for line in completed.stdout.split("\n")
+            if line.strip() and json.loads(line).get("id") == 2
+        )
+        measurements[mode] = {
+            "toolCount": len(definitions),
+            "toolsListResponseBytes": len(list_line.encode("utf-8")),
+            "toolsListResultBytes": len(
+                json.dumps(before["result"], ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            ),
+            "summedDefinitionBytes": sum(
+                len(json.dumps(tool, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) for tool in definitions
+            ),
+        }
+    return measurements
+
+
+def measure_advertisement(binary: str, project_path: str, timeout: int) -> None:
+    project = Path(project_path).resolve()
+    require((project / "project.godot").is_file(), "--project must identify an existing project with a running MCP Host.")
+    runner = ProcessRunner(ProcessRunner.resolve_binary(binary), project, timeout)
+    discovery_command = ["--mcp-discover", "--path", str(project)]
+    before = parse_discovery(runner.invoke(discovery_command), "advertisement measurement")
+    measurements = check_discovery_advertisement(runner, project, before["protocolVersion"])
+    after = parse_discovery(runner.invoke(discovery_command), "advertisement measurement")
+    require(before["instanceId"] == after["instanceId"], "The Host changed during measurement.")
+    measurements["binary"] = str(runner.binary)
+    measurements["instanceId"] = before["instanceId"]
+    print(json.dumps(measurements, indent=2))
+
+
 def run_smoke(binary: str, timeout: int, keep_temporary_projects: bool) -> None:
     manifest_path = Path(__file__).parent / "data/mcp_tool_manifest.json"
     expected_tools = load_tool_manifest(manifest_path)
@@ -480,6 +594,7 @@ windows.debug = "res://smoke.dll"
             require(page.get("nextOffset") == next_offset, "catalog enumeration returned an incorrect offset.")
             discovered_names.extend(entry.get("name") for entry in page.get("tools", []))
         require(discovered_names == expected_tools, "catalog enumeration lost or reordered tools.")
+        check_discovery_advertisement(runner, project_a, discovery_a["protocolVersion"], tools_list)
         setting = structured_result(surface, 5, "project/get_setting")
         require(setting.get("value") == "MCP Python Smoke A", "project/get_setting returned the wrong value.")
         require(
@@ -974,11 +1089,19 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         description="Cross-platform smoke test for the embedded Godot MCP CLI and editor Host."
     )
     parser.add_argument("--binary", required=True, help="Godot editor binary built with MCP support.")
+    parser.add_argument(
+        "--measure-advertisement",
+        action="store_true",
+        help="Check discovery modes and print payload bytes against an existing Host.",
+    )
+    parser.add_argument("--project", help="Existing running MCP project; required only with --measure-advertisement.")
     parser.add_argument("--timeout-seconds", type=int, default=45, help="Per-operation smoke timeout (5-300 seconds).")
     parser.add_argument(
         "--keep-temporary-projects", action="store_true", help="Keep generated projects for failure investigation."
     )
     args = parser.parse_args(argv)
+    if args.measure_advertisement != bool(args.project):
+        parser.error("--measure-advertisement and --project must be supplied together")
     if not 5 <= args.timeout_seconds <= 300:
         parser.error("--timeout-seconds must be between 5 and 300")
     return args
@@ -987,7 +1110,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     try:
-        run_smoke(args.binary, args.timeout_seconds, args.keep_temporary_projects)
+        if args.measure_advertisement:
+            measure_advertisement(args.binary, args.project, args.timeout_seconds)
+        else:
+            run_smoke(args.binary, args.timeout_seconds, args.keep_temporary_projects)
     except SmokeFailure as error:
         print(str(error), file=sys.stderr)
         return 1

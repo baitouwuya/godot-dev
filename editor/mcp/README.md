@@ -21,10 +21,53 @@ ordinary `tools/call` method. Discovery preserves the original schemas, behavior
 annotations, validation and tracing. Unknown or unavailable names produce the
 catalog tool error `TOOL_NOT_FOUND`.
 
-The full build still advertises every tool through `tools/list`: the original
-111 tools followed by these two catalog tools. Compact advertisement is not yet
-implemented. The proposed negotiated mode, client requirements, complete mapping
-and verification plan are in [PROGRESSIVE_DISCLOSURE.md](PROGRESSIVE_DISCLOSURE.md).
+Full advertisement remains the default: the original 111 tools followed by the
+two catalog tools. To opt into compact advertisement, send this object as
+`initialize.params.capabilities`:
+
+```json
+{"experimental":{"io.godot/tool-discovery":{"version":1}}}
+```
+
+The server acknowledges the same extension in `result.capabilities` only when
+version 1 is requested and all five compact tools are callable. Missing,
+malformed, or unsupported extension declarations keep the unchanged full list
+and receive no acknowledgement. Compact `tools/list` returns, in order:
+
+1. `godot.catalog.search`
+2. `godot.catalog.describe`
+3. `godot.editor.get_state`
+4. `godot.runtime.get_state`
+5. `godot.project.inspect`
+
+All other tools remain discoverable and callable by canonical name. Describe
+does not expand either advertised list. A supporting client must load described
+definitions into its model's callable tool set; ordinary clients should keep
+full mode. The choice belongs to one session and resets on reconnect. No schema
+cache or list-change notifications are added. If a compact core tool becomes
+unavailable after negotiation, `tools/list` reports an internal error; start a
+new session to renegotiate. Complete mapping and remaining work are in
+[PROGRESSIVE_DISCLOSURE.md](PROGRESSIVE_DISCLOSURE.md).
+
+To check the negotiation matrix and measure full versus compact advertisement
+on the host, set `$EditorBinary` to the newly built editor and `$ProjectPath` to
+an existing project in this checkout already running that editor with MCP:
+
+```powershell
+py -3 tests/editor/mcp/test_mcp_cli_smoke.py --binary "$EditorBinary" --measure-advertisement --project "$ProjectPath"
+```
+
+This connects without launching or stopping an editor and makes only read-only
+tool calls. It reports `toolsListResponseBytes`: UTF-8 bytes of the actual
+`tools/list` JSON-RPC response with request ID 2, excluding its newline and all
+transport headers. It also reports `toolsListResultBytes` (the result object
+reserialized with Python `json.dumps(ensure_ascii=False, separators=(",", ":"))`)
+and `summedDefinitionBytes` (the sum using that serializer for each definition,
+excluding the array and envelope). Compare the same field between modes;
+these are payload sizes, not token counts or timing measurements. The command
+also requires unchanged definitions on fallback, successful orienting and hidden
+canonical calls, and unchanged advertisement after describe. Execution and
+savings remain pending host verification.
 
 ## Start or Reuse a Project Host
 
@@ -287,7 +330,7 @@ py -3 tests/editor/mcp/test_mcp_cli_smoke.py `
   --binary bin/godot.windows.editor.dev.x86_64.console.exe
 ```
 
-The Python test creates two temporary projects and verifies explicit-path errors, CLI/editor conflicts, ordinary editor behavior, public discovery fields, independent multi-project routing, same-project Host exclusion, JSON-only stdio stdout, the complete ordered 113-tool MCP surface, catalog enumeration and exact definitions, native settings and script/class operations, structural Node edits with undo/redo and explicit scene save, runtime play/state/stop, runtime warnings and errors, and project isolation. Temporary editor plugins request clean Host shutdown; forced termination is used only as a timeout fallback.
+The Python test creates two temporary projects and verifies explicit-path errors, CLI/editor conflicts, ordinary editor behavior, public discovery fields, independent multi-project routing, same-project Host exclusion, JSON-only stdio stdout, the complete ordered 113-tool MCP surface, compact negotiation and full fallback, catalog enumeration and exact definitions, native settings and script/class operations, structural Node edits with undo/redo and explicit scene save, runtime play/state/stop, runtime warnings and errors, and project isolation. Temporary editor plugins request clean Host shutdown; forced termination is used only as a timeout fallback. The separate `--measure-advertisement --project` mode only connects to an existing Host.
 
 The Windows PowerShell smoke test remains available for Windows-specific extension coverage. It requires PowerShell 7.2 or newer:
 

@@ -34,6 +34,16 @@
 
 namespace {
 
+// The version 1 advertisement contract. These are registry names, not Provider dependencies.
+static constexpr const char *TOOL_DISCOVERY_EXTENSION = "io.godot/tool-discovery";
+static constexpr const char *COMPACT_TOOL_NAMES[] = {
+	"godot.catalog.search",
+	"godot.catalog.describe",
+	"godot.editor.get_state",
+	"godot.runtime.get_state",
+	"godot.project.inspect",
+};
+
 static String _trace_method(const Dictionary &p_request) {
 	const Variant method = p_request.get("method", Variant());
 	if (method.get_type() != Variant::STRING) {
@@ -111,6 +121,7 @@ void MCPProtocol::set_project_metadata(const Dictionary &p_project_metadata) {
 
 void MCPProtocol::reset_session() {
 	session_state = SESSION_UNINITIALIZED;
+	compact_tool_list = false;
 	protocol_version = String();
 	client_info.clear();
 	client_capabilities.clear();
@@ -158,6 +169,29 @@ String MCPProtocol::_negotiate_protocol_version(const String &p_requested) const
 
 bool MCPProtocol::_is_batch_supported() const {
 	return session_state == SESSION_READY && protocol_version == PROTOCOL_VERSION_2025_03_26;
+}
+
+bool MCPProtocol::_can_use_compact_tool_list() const {
+	const Variant experimental_value = client_capabilities.get("experimental", Variant());
+	if (!tool_registry || experimental_value.get_type() != Variant::DICTIONARY) {
+		return false;
+	}
+	const Dictionary experimental = experimental_value;
+	const Variant discovery_value = experimental.get(TOOL_DISCOVERY_EXTENSION, Variant());
+	if (discovery_value.get_type() != Variant::DICTIONARY) {
+		return false;
+	}
+	const Dictionary discovery = discovery_value;
+	const Variant version = discovery.get("version", Variant());
+	if ((version.get_type() != Variant::INT && version.get_type() != Variant::FLOAT) || double(version) != 1.0) {
+		return false;
+	}
+	for (const char *name : COMPACT_TOOL_NAMES) {
+		if (!tool_registry->has_tool(name)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 MCPToolCallContext MCPProtocol::_make_tool_call_context(const Variant &p_id, const Dictionary &p_session_context) const {
@@ -220,6 +254,14 @@ Variant MCPProtocol::_handle_initialize(const Dictionary &p_params, const Varian
 	Dictionary tools;
 	tools["listChanged"] = false;
 	capabilities["tools"] = tools;
+	compact_tool_list = _can_use_compact_tool_list();
+	if (compact_tool_list) {
+		Dictionary discovery;
+		discovery["version"] = 1;
+		Dictionary experimental;
+		experimental[TOOL_DISCOVERY_EXTENSION] = discovery;
+		capabilities["experimental"] = experimental;
+	}
 	result["capabilities"] = capabilities;
 
 	Dictionary server_info;
@@ -318,7 +360,19 @@ Variant MCPProtocol::_dispatch_request_impl(const Dictionary &p_request, bool &r
 			return _make_error(id, INTERNAL_ERROR, "MCP tool registry is not configured.");
 		}
 		Dictionary result;
-		result["tools"] = tool_registry->get_tool_definitions();
+		if (compact_tool_list) {
+			Array definitions;
+			for (const char *name : COMPACT_TOOL_NAMES) {
+				const Dictionary definition = tool_registry->get_tool_definition(name);
+				if (definition.is_empty()) {
+					return _make_error(id, INTERNAL_ERROR, "A negotiated compact tool is unavailable. Start a new MCP session.");
+				}
+				definitions.push_back(definition);
+			}
+			result["tools"] = definitions;
+		} else {
+			result["tools"] = tool_registry->get_tool_definitions();
+		}
 		return _make_response(id, result);
 	}
 	if (method == "tools/call") {

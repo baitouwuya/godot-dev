@@ -28,6 +28,7 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
+#include "core/mcp/mcp_protocol.h"
 #include "core/mcp/mcp_tool_registry.h"
 #include "core/object/callable_mp.h"
 #include "editor/mcp/providers/mcp_catalog_provider.h"
@@ -245,6 +246,70 @@ TEST_CASE("[MCP][Catalog] Registration rollback and cleanup preserve unrelated t
 	CHECK(registry.has_tool("godot.test.retained"));
 	CHECK_FALSE(registry.has_tool("godot.catalog.describe"));
 	registry.unregister_tools_for_owner(&target);
+}
+
+TEST_CASE("[MCP][Catalog] Describe never expands full or compact protocol advertisement") {
+	MCPToolRegistry registry;
+	ToolProvider target;
+	MCPCatalogProvider catalog;
+	for (const String &name : PackedStringArray{ "godot.editor.get_state", "godot.runtime.get_state", "godot.project.inspect", "godot.test.hidden" }) {
+		REQUIRE(registry.register_tool(_definition(name), callable_mp(&target, &ToolProvider::call), &target) == OK);
+	}
+	REQUIRE(catalog.register_tools(&registry) == OK);
+	const Array full_definitions = registry.get_tool_definitions();
+	for (int mode = 0; mode < 2; mode++) {
+		MCPProtocol protocol(&registry);
+		Dictionary capabilities;
+		if (mode == 1) {
+			Dictionary discovery;
+			discovery["version"] = 1;
+			Dictionary experimental;
+			experimental["io.godot/tool-discovery"] = discovery;
+			capabilities["experimental"] = experimental;
+		}
+		Dictionary client_info;
+		client_info["name"] = "catalog-test";
+		client_info["version"] = "1";
+		Dictionary params;
+		params["protocolVersion"] = MCPProtocol::PROTOCOL_VERSION_LATEST;
+		params["capabilities"] = capabilities;
+		params["clientInfo"] = client_info;
+		Dictionary request;
+		request["jsonrpc"] = "2.0";
+		request["id"] = 1;
+		request["method"] = "initialize";
+		request["params"] = params;
+		const Dictionary initialized = protocol.dispatch(request).response;
+		REQUIRE_FALSE(initialized.has("error"));
+		const Dictionary server_capabilities = Dictionary(initialized["result"])["capabilities"];
+		CHECK(server_capabilities.has("experimental") == (mode == 1));
+		protocol.dispatch_json("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
+		const String list_request = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}";
+		const Dictionary before = protocol.dispatch_json(list_request).response;
+		const Array advertised = Dictionary(before["result"])["tools"];
+		CHECK(advertised.size() == (mode == 1 ? 5 : 6));
+		for (const String &name : PackedStringArray{ "godot.test.hidden", "godot.catalog.describe" }) {
+			Dictionary arguments;
+			arguments["name"] = name;
+			params = Dictionary();
+			params["name"] = "godot.catalog.describe";
+			params["arguments"] = arguments;
+			request["method"] = "tools/call";
+			request["params"] = params;
+			const Dictionary described = protocol.dispatch(request).response;
+			REQUIRE_FALSE(described.has("error"));
+			const Dictionary result = described["result"];
+			REQUIRE_FALSE(bool(result.get("isError", false)));
+			CHECK(Dictionary(Dictionary(result["structuredContent"])["tool"]) == registry.get_tool_definition(name));
+			CHECK(Dictionary(protocol.dispatch_json(list_request).response) == before);
+		}
+		const Dictionary called = protocol.dispatch_json("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"godot.test.hidden\",\"arguments\":{}}}").response;
+		REQUIRE_FALSE(called.has("error"));
+		CHECK_FALSE(bool(Dictionary(called["result"]).get("isError", false)));
+		CHECK(Dictionary(protocol.dispatch_json(list_request).response) == before);
+		CHECK(registry.get_tool_definitions() == full_definitions);
+	}
+	CHECK(target.call_count == 2);
 }
 
 } // namespace TestMCPCatalogProvider
