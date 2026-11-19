@@ -102,9 +102,13 @@ bool RenderingDeviceDriverWebGPU::prepare_dispatch(CommandRecording &r_cmd, bool
 		}
 	}
 	std::vector<PhysicalBindGroup> groups(variant->groups.size());
+	const auto &recipe = *r_cmd.pipeline;
 	for (uint32_t group = 0; group < groups.size(); ++group) {
 		const Error error = build_bind_group(*variant, group, r_cmd.sets, r_cmd.frames, r_cmd.push.page ? &r_cmd.push : nullptr, groups[group]);
-		ERR_FAIL_COND_V_MSG(error != OK, false, "Missing or incompatible WebGPU descriptor for the current draw or dispatch.");
+		ERR_FAIL_COND_V_MSG(error != OK, false,
+				vformat("WebGPU %s failed to bind group %d for shader '%s' (pass '%s').", p_compute ? "dispatch" : "draw", group,
+						String::utf8(recipe.label.empty() ? recipe.source->source->shader_name.get_data() : recipe.label.c_str()),
+						r_cmd.labels.empty() ? String("unlabeled") : String::utf8(r_cmd.labels.back().c_str())));
 	}
 	if (p_compute) {
 		r_cmd.open_compute(); // WebGPU validates the accumulated usages per dispatch, not per compute pass.

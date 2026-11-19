@@ -61,6 +61,18 @@ bool dynamic_binding(const ShaderVariant &p_shader, const BindingPlan &p_binding
 	return p_binding.key.role == Role::PUSH_CONSTANT || p_shader.dynamic_buffers.count(p_binding.key);
 }
 
+const char *binding_role_name(Role p_role) {
+	switch (p_role) {
+		case Role::TEXTURE: return "sampled texture";
+		case Role::SAMPLER: return "sampler";
+		case Role::PUSH_CONSTANT: return "push constants";
+		case Role::STORAGE_BUFFER: return "storage buffer";
+		case Role::STORAGE_TEXTURE: return "storage texture";
+		case Role::UNIFORM_BUFFER: return "uniform buffer";
+	}
+	return "unknown";
+}
+
 const LogicalBinding *logical_binding(const std::map<uint32_t, std::shared_ptr<LogicalUniformSet>> &p_sets, const BindingKey &p_key) {
 	auto set = p_sets.find(p_key.set);
 	if (set == p_sets.end()) {
@@ -239,13 +251,18 @@ Error RenderingDeviceDriverWebGPU::build_bind_group(ShaderVariant &p_shader, uin
 		}
 		const auto &logical = binding.key;
 		const LogicalBinding *bound = logical_binding(p_sets, logical);
+		const auto describe_binding = [&]() {
+			return vformat("set %d, binding %d, role %s, element %d (WebGPU group %d, binding %d)",
+					logical.set, logical.binding, binding_role_name(logical.role), logical.element, binding.group, binding.binding);
+		};
 		WGPUBindGroupEntry entry = WGPU_BIND_GROUP_ENTRY_INIT;
 		entry.binding = binding.binding;
 		if (logical.role == Role::PUSH_CONSTANT) {
-			if (!p_push) {
-				return ERR_BUSY;
-			}
-			DEV_ASSERT(p_push->buffer && p_push->page && p_push->size >= plan.push_constant.size);
+			ERR_FAIL_NULL_V_MSG(p_push, ERR_INVALID_DATA, "Missing push constants for " + describe_binding());
+			ERR_FAIL_COND_V_MSG(p_push->size < plan.push_constant.size, ERR_INVALID_DATA,
+					vformat("Push constants for %s require %d bytes, but %d bytes were supplied.",
+							describe_binding(), plan.push_constant.size, p_push->size));
+			DEV_ASSERT(p_push->buffer && p_push->page);
 			DEV_ASSERT(p_push->offset % state->limits.minStorageBufferOffsetAlignment == 0);
 			DEV_ASSERT(uint64_t(p_push->offset) + p_push->size <= p_push->buffer->allocation_size);
 			entry.buffer = p_push->buffer->buffer.get();
@@ -257,29 +274,32 @@ Error RenderingDeviceDriverWebGPU::build_bind_group(ShaderVariant &p_shader, uin
 			const auto immutable = p_shader.immutable.find(logical);
 			const auto sampler = immutable != p_shader.immutable.end() ? immutable->second : bound ? bound->sampler
 																								   : nullptr;
-			if (!sampler) {
-				return ERR_BUSY;
-			}
+			ERR_FAIL_COND_V_MSG(!sampler, ERR_INVALID_DATA, "Missing sampler for " + describe_binding());
 			DEV_ASSERT(binding.sampler_type != SamplerType::NONE && sampler->type != SamplerType::NONE);
 			const bool comparison = binding.sampler_type == SamplerType::COMPARISON;
-			ERR_FAIL_COND_V_MSG(comparison != (sampler->type == SamplerType::COMPARISON), ERR_INVALID_DATA, "WebGPU sampler is incompatible with the compiled binding type.");
+			ERR_FAIL_COND_V_MSG(comparison != (sampler->type == SamplerType::COMPARISON), ERR_INVALID_DATA,
+					"WebGPU sampler is incompatible with the compiled binding type at " + describe_binding());
 			const bool nearest = binding.sampler_type == SamplerType::NON_FILTERING && sampler->type == SamplerType::FILTERING;
 			entry.sampler = nearest ? sampler->non_filtering.get() : sampler->sampler.get();
 			uses.push_back(sampler);
 		} else {
-			if (!bound) {
-				return ERR_BUSY;
-			}
+			ERR_FAIL_NULL_V_MSG(bound, ERR_INVALID_DATA, "Missing resource for " + describe_binding());
 			if (logical.role == Role::TEXTURE || logical.role == Role::STORAGE_TEXTURE || binding.format.atomic_buffer) {
 				const auto &texture = bound->texture;
 				DEV_ASSERT(texture);
 				if (binding.format.atomic_buffer) {
-					ERR_FAIL_COND_V(!texture->backing->atomic_buffer, ERR_INVALID_DATA);
+					ERR_FAIL_COND_V_MSG(!texture->backing->atomic_buffer, ERR_INVALID_DATA,
+							"Missing atomic image backing for " + describe_binding());
+					ERR_FAIL_COND_V_MSG(static_cast<uint32_t>(texture->format.storage_format) != binding.format.logical_format ||
+									texture->dimension != shader_view_dimension(binding.format),
+							ERR_INVALID_DATA, "Atomic image format or dimension does not match ShaderPlan at " + describe_binding());
 					entry.buffer = texture->backing->atomic_buffer.get();
 					entry.size = texture->backing->atomic_size;
 				} else if (logical.role == Role::STORAGE_TEXTURE) {
 					const auto physical = storage_texture_format(static_cast<spv::ImageFormat>(binding.format.physical_format));
-					ERR_FAIL_COND_V_MSG(!texture->storage || texture->format.format != physical, ERR_INVALID_DATA, "Storage texture view does not match ShaderPlan.");
+					ERR_FAIL_COND_V_MSG(!texture->storage || texture->format.format != physical, ERR_INVALID_DATA,
+							vformat("Storage texture view does not match ShaderPlan at %s (expected format %d, got %d).",
+									describe_binding(), static_cast<uint32_t>(physical), static_cast<uint32_t>(texture->format.format)));
 					entry.textureView = texture->storage.get();
 				} else {
 					const bool depth = binding.format.sample_type == SampleType::DEPTH;
@@ -289,7 +309,7 @@ Error RenderingDeviceDriverWebGPU::build_bind_group(ShaderVariant &p_shader, uin
 					ERR_FAIL_COND_V_MSG(!entry.textureView || !compatible || texture->dimension != shader_view_dimension(binding.format) ||
 									binding.format.multisampled != (texture->backing->desc.samples != TEXTURE_SAMPLES_1),
 							ERR_INVALID_DATA,
-							"Sampled texture view does not match ShaderPlan; resolve depth/float/view types before pipeline compilation.");
+							"Sampled texture view does not match ShaderPlan at " + describe_binding());
 				}
 				uses.push_back(texture);
 				uses.push_back(texture->backing);

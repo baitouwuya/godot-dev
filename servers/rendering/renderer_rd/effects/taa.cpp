@@ -92,7 +92,6 @@ void TAA::process(Ref<RenderSceneBuffersRD> p_render_buffers, RD::DataFormat p_f
 
 	uint32_t view_count = p_render_buffers->get_view_count();
 	Size2i internal_size = p_render_buffers->get_internal_size();
-	Size2i target_size = p_render_buffers->get_target_size();
 
 	bool just_allocated = false;
 	if (!p_render_buffers->has_texture(SNAME("taa"), SNAME("history"))) {
@@ -123,7 +122,7 @@ void TAA::process(Ref<RenderSceneBuffersRD> p_render_buffers, RD::DataFormat p_f
 		}
 
 		copy_effects->copy_to_rect(internal_texture, taa_history, Rect2(0, 0, internal_size.x, internal_size.y));
-		copy_effects->copy_to_rect(velocity_buffer, taa_prev_velocity, Rect2(0, 0, target_size.x, target_size.y));
+		copy_effects->copy_to_rect(velocity_buffer, taa_prev_velocity, Rect2(0, 0, internal_size.x, internal_size.y));
 	}
 
 	RD::get_singleton()->draw_command_end_label();

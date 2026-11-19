@@ -35,8 +35,10 @@ def embedded_header(jobs, results, compiler):
         for prop in ("raw_depth", "unfilterable_float"):
             if prop in options:
                 out.append(f"options.{prop} = {key_list(options[prop])};")
-        for item in options["storage_formats"]:
-            out.append(f'options.storage_formats[{key(item, "storage_texture")}] = {item["format"]}u;')
+        for prop in ("storage_formats", "atomic_images"):
+            for item in options[prop]:
+                slot = key({**item, "role": "storage_texture"})
+                out.append(f'options.{prop}[{slot}] = {item["format"]}u;')
         for item in options["immutable_samplers"]:
             out.append(f'options.immutable_samplers[{key(item, "sampler")}] = {item["equivalence"]}u;')
         out += ["return options;", "}", f"inline ShaderPlan plan_{i}() {{", "ShaderPlan plan;"]

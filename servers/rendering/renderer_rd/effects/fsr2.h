@@ -56,6 +56,7 @@ namespace RendererRD {
 class FSR2Context {
 public:
 	enum ResourceID : uint32_t {
+		RESOURCE_ID_NULL = 0,
 		RESOURCE_ID_DYNAMIC = 0xFFFFFFFF
 	};
 
@@ -66,6 +67,11 @@ public:
 		LocalVector<FfxResourceDescription> descriptions;
 		LocalVector<uint32_t> dynamic_list;
 		LocalVector<uint32_t> free_list;
+
+		Resources() {
+			// The SDK clears unallocated resource slots to index zero, including during partial creation.
+			add(RID(), false, RESOURCE_ID_NULL, {});
+		}
 
 		uint32_t add(RID p_rid, bool p_dynamic, uint32_t p_id, FfxResourceDescription p_description) {
 			uint32_t ret_index;
@@ -113,6 +119,7 @@ public:
 		Resources resources;
 		LocalVector<FfxGpuJobDescription> gpu_jobs;
 		RID ubo_ring_buffer[FSR2_UBO_RING_BUFFER_SIZE];
+		uint32_t ubo_ring_buffer_count = 0;
 		uint32_t ubo_ring_buffer_index = 0;
 		FfxDevice device = nullptr;
 	};
@@ -174,6 +181,7 @@ public:
 
 	FSR2Effect();
 	~FSR2Effect();
+	static bool is_supported();
 	FSR2Context *create_context(Size2i p_internal_size, Size2i p_target_size);
 	void upscale(const Parameters &p_params);
 

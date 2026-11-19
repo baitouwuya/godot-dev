@@ -176,9 +176,10 @@ static FfxErrorCode create_backend_context_rd(FfxFsr2Interface *p_backend_interf
 
 	// Create a ring buffer of uniform buffers.
 	// FIXME: This could be optimized to be a single memory block if it was possible for RD to create views into a particular memory range of a UBO.
-	for (uint32_t i = 0; i < FSR2_UBO_RING_BUFFER_SIZE; i++) {
-		scratch.ubo_ring_buffer[i] = RD::get_singleton()->uniform_buffer_create(FFX_MAX_CONST_SIZE * sizeof(uint32_t));
-		ERR_FAIL_COND_V(scratch.ubo_ring_buffer[i].is_null(), FFX_ERROR_BACKEND_API_ERROR);
+	for (; scratch.ubo_ring_buffer_count < FSR2_UBO_RING_BUFFER_SIZE; ++scratch.ubo_ring_buffer_count) {
+		RID &ubo = scratch.ubo_ring_buffer[scratch.ubo_ring_buffer_count];
+		ubo = RD::get_singleton()->uniform_buffer_create(FFX_MAX_CONST_SIZE * sizeof(uint32_t));
+		ERR_FAIL_COND_V(ubo.is_null(), FFX_ERROR_BACKEND_API_ERROR);
 	}
 
 	return FFX_OK;
@@ -195,7 +196,7 @@ static FfxErrorCode get_device_capabilities_rd(FfxFsr2Interface *p_backend_inter
 static FfxErrorCode destroy_backend_context_rd(FfxFsr2Interface *p_backend_interface) {
 	FSR2Context::Scratch &scratch = *reinterpret_cast<FSR2Context::Scratch *>(p_backend_interface->scratchBuffer);
 
-	for (uint32_t i = 0; i < FSR2_UBO_RING_BUFFER_SIZE; i++) {
+	for (uint32_t i = 0; i < scratch.ubo_ring_buffer_count; i++) {
 		RD::get_singleton()->free_rid(scratch.ubo_ring_buffer[i]);
 	}
 
@@ -251,7 +252,7 @@ static FfxErrorCode create_resource_rd(FfxFsr2Interface *p_backend_interface, co
 static FfxErrorCode register_resource_rd(FfxFsr2Interface *p_backend_interface, const FfxResource *p_in_resource, FfxResourceInternal *p_out_resource) {
 	if (p_in_resource->resource == nullptr) {
 		// Null resource case.
-		p_out_resource->internalIndex = -1;
+		p_out_resource->internalIndex = FSR2Context::RESOURCE_ID_NULL;
 		return FFX_OK;
 	}
 
@@ -276,7 +277,7 @@ static FfxErrorCode unregister_resources_rd(FfxFsr2Interface *p_backend_interfac
 }
 
 static FfxResourceDescription get_resource_description_rd(FfxFsr2Interface *p_backend_interface, FfxResourceInternal p_resource) {
-	if (p_resource.internalIndex != -1) {
+	if (p_resource.internalIndex != FSR2Context::RESOURCE_ID_NULL) {
 		FSR2Context::Scratch &scratch = *reinterpret_cast<FSR2Context::Scratch *>(p_backend_interface->scratchBuffer);
 		return scratch.resources.descriptions[p_resource.internalIndex];
 	} else {
@@ -285,7 +286,7 @@ static FfxResourceDescription get_resource_description_rd(FfxFsr2Interface *p_ba
 }
 
 static FfxErrorCode destroy_resource_rd(FfxFsr2Interface *p_backend_interface, FfxResourceInternal p_resource) {
-	if (p_resource.internalIndex != -1) {
+	if (p_resource.internalIndex != FSR2Context::RESOURCE_ID_NULL) {
 		FSR2Context::Scratch &scratch = *reinterpret_cast<FSR2Context::Scratch *>(p_backend_interface->scratchBuffer);
 		if (scratch.resources.rids[p_resource.internalIndex].is_valid()) {
 			RD::get_singleton()->free_rid(scratch.resources.rids[p_resource.internalIndex]);
@@ -511,6 +512,14 @@ static FfxResource get_resource_rd(RID *p_rid, const wchar_t *p_name) {
 
 FSR2Context::~FSR2Context() {
 	ffxFsr2ContextDestroy(&fsr_context);
+}
+
+bool FSR2Effect::is_supported() {
+	const RD *rd = RD::get_singleton();
+	// The SPD pass reads other workgroups' image writes within one dispatch. WGSL barriers
+	// are workgroup-scoped, so exposing the required storage formats alone is not sufficient.
+	return rd->get_device_api_name() != "WebGPU" &&
+			rd->texture_is_format_supported_for_usage(RD::DATA_FORMAT_B10G11R11_UFLOAT_PACK32, RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT);
 }
 
 FSR2Effect::FSR2Effect() {

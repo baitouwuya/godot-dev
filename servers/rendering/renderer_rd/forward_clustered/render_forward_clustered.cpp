@@ -1792,6 +1792,8 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 	switch (rb->get_scaling_3d_mode()) {
 		case RSE::VIEWPORT_SCALING_3D_MODE_FSR2:
+			rb_data->ensure_fsr2(fsr2_effect);
+			ERR_FAIL_NULL_MSG(rb_data->get_fsr2_context(), "Failed to create the FSR2 context for this viewport.");
 			scale_type = SCALE_FSR2;
 			break;
 		case RSE::VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL:
@@ -2464,8 +2466,6 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 	if (rb_data.is_valid() && (using_upscaling || using_taa)) {
 		if (scale_type == SCALE_FSR2) {
-			rb_data->ensure_fsr2(fsr2_effect);
-
 			RID exposure;
 			if (RSG::camera_attributes->camera_attributes_uses_auto_exposure(p_render_data->camera_attributes)) {
 				exposure = luminance->get_current_luminance_buffer(rb);
@@ -5244,7 +5244,7 @@ RenderForwardClustered::RenderForwardClustered() {
 	_update_global_pipeline_data_requirements_from_project();
 
 	taa = memnew(RendererRD::TAA);
-	fsr2_effect = memnew(RendererRD::FSR2Effect);
+	fsr2_effect = RendererRD::FSR2Effect::is_supported() ? memnew(RendererRD::FSR2Effect) : nullptr;
 	ss_effects = memnew(RendererRD::SSEffects);
 #ifdef METAL_MFXTEMPORAL_ENABLED
 	motion_vectors_store = memnew(RendererRD::MotionVectorsStore);

@@ -32,6 +32,7 @@ struct TextureFormatInfo {
 	bool multisample = false;
 	bool srgb = false;
 	bool compressed = false;
+	Rdc::DataFormat logical_format = Rdc::DATA_FORMAT_MAX;
 	bool valid() const { return format != WGPUTextureFormat_Undefined; }
 };
 
@@ -49,6 +50,7 @@ inline uint64_t align_up(uint64_t p_size, uint64_t p_align) {
 }
 
 TextureFormatInfo texture_format(const DeviceState &p_device, Rdc::DataFormat p_format, bool p_storage);
+bool texture_swizzle_is_identity(const RDD::TextureView &p_view);
 bool bake_texture_swizzle(TextureFormatInfo &r_format, const RDD::TextureView &p_view, bool p_storage);
 WGPUTextureFormat storage_texture_format(spv::ImageFormat p_format);
 WGPUTextureFormat srgb_partner(WGPUTextureFormat p_format);

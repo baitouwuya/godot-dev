@@ -70,10 +70,16 @@ WGPURenderPipeline PipelineResource::render_variant(WGPUIndexFormat p_index) con
 
 RDD::SamplerID RenderingDeviceDriverWebGPU::sampler_create(const SamplerState &p_sampler) {
 	state->assert_owner();
-	ERR_FAIL_COND_V_MSG(p_sampler.unnormalized_uvw || p_sampler.lod_bias != 0.0f || p_sampler.repeat_u >= SAMPLER_REPEAT_MODE_CLAMP_TO_BORDER ||
+	ERR_FAIL_COND_V_MSG(p_sampler.unnormalized_uvw, {}, "WebGPU samplers require normalized texture coordinates.");
+	ERR_FAIL_COND_V_MSG(p_sampler.repeat_u >= SAMPLER_REPEAT_MODE_CLAMP_TO_BORDER ||
 					p_sampler.repeat_v >= SAMPLER_REPEAT_MODE_CLAMP_TO_BORDER || p_sampler.repeat_w >= SAMPLER_REPEAT_MODE_CLAMP_TO_BORDER,
 			{},
-			"This sampler needs shader emulation of border addressing, bias or unnormalized coordinates.");
+			"WebGPU does not support clamp-to-border or mirror-clamp-to-edge sampler addressing.");
+	ERR_FAIL_COND_V_MSG(!std::isfinite(p_sampler.lod_bias) || !std::isfinite(p_sampler.min_lod) || !std::isfinite(p_sampler.max_lod),
+			{}, "Sampler LOD bias and clamps must be finite.");
+	if (p_sampler.lod_bias != 0.0f) {
+		WARN_PRINT_ONCE("WebGPU does not support sampler LOD bias. Using an unbiased sampler.");
+	}
 	constexpr WGPUAddressMode addresses[] = { WGPUAddressMode_Repeat, WGPUAddressMode_MirrorRepeat, WGPUAddressMode_ClampToEdge };
 	WGPUSamplerDescriptor desc = WGPU_SAMPLER_DESCRIPTOR_INIT;
 	desc.addressModeU = addresses[p_sampler.repeat_u];
@@ -86,10 +92,14 @@ RDD::SamplerID RenderingDeviceDriverWebGPU::sampler_create(const SamplerState &p
 	desc.lodMaxClamp = MAX(desc.lodMinClamp, p_sampler.max_lod);
 	desc.compare = p_sampler.enable_compare ? compare_function(p_sampler.compare_op) : WGPUCompareFunction_Undefined;
 	if (p_sampler.use_anisotropy) {
-		desc.maxAnisotropy = std::clamp(p_sampler.anisotropy_max, 1.0f, float(MAX_SAMPLER_ANISOTROPY));
-		if (desc.maxAnisotropy > 1) {
-			desc.magFilter = desc.minFilter = WGPUFilterMode_Linear;
-			desc.mipmapFilter = WGPUMipmapFilterMode_Linear;
+		ERR_FAIL_COND_V_MSG(!std::isfinite(p_sampler.anisotropy_max), {}, "Sampler maximum anisotropy must be finite.");
+		// Clamp first, then round down to the integer anisotropy limit.
+		desc.maxAnisotropy = static_cast<uint16_t>(std::clamp(p_sampler.anisotropy_max, 1.0f, float(MAX_SAMPLER_ANISOTROPY)));
+		const bool all_linear = desc.magFilter == WGPUFilterMode_Linear && desc.minFilter == WGPUFilterMode_Linear &&
+				desc.mipmapFilter == WGPUMipmapFilterMode_Linear;
+		if (desc.maxAnisotropy > 1 && !all_linear) {
+			WARN_PRINT_ONCE("WebGPU anisotropy requires all filters to be linear. Keeping the requested filters at 1x.");
+			desc.maxAnisotropy = 1;
 		}
 	}
 	auto sampler = std::make_shared<SamplerResource>();
@@ -334,6 +344,9 @@ std::shared_ptr<PipelineResource> RenderingDeviceDriverWebGPU::materialize_pipel
 				options.unfilterable_float.push_back(key);
 			} else if (key.role == Role::STORAGE_TEXTURE) {
 				options.storage_formats[key] = static_cast<uint32_t>(texture.format.storage_format);
+			} else if (key.role == Role::STORAGE_BUFFER) {
+				// The set stores the physical role; the compiler looks up the SPIR-V image.
+				options.atomic_images[{ key.set, key.binding, key.element, Role::STORAGE_TEXTURE }] = static_cast<uint32_t>(texture.format.storage_format);
 			}
 		}
 	}

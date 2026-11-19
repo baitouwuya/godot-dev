@@ -10,6 +10,10 @@ namespace {
 using F = spv::ImageFormat;
 using DF = Rdc::DataFormat;
 
+bool is_identity(Rdc::TextureSwizzle p_swizzle, Rdc::TextureSwizzle p_component) {
+	return p_swizzle == p_component || p_swizzle == Rdc::TEXTURE_SWIZZLE_IDENTITY;
+}
+
 struct FormatRow {
 	DF logical;
 	WGPUTextureFormat physical;
@@ -239,11 +243,12 @@ WGPUTextureFormat storage_texture_format(F p_format) {
 }
 
 TextureFormatInfo texture_format(const DeviceState &p_device, DF p_format, bool p_storage) {
+	TextureFormatInfo info;
+	info.logical_format = p_format;
 	for (const FormatRow &row : colors) {
 		if (row.logical != p_format) {
 			continue;
 		}
-		TextureFormatInfo info;
 		info.format = row.physical;
 		info.storage_format = row.storage;
 		info.sample_type = row.sample;
@@ -286,7 +291,6 @@ TextureFormatInfo texture_format(const DeviceState &p_device, DF p_format, bool 
 	}
 	for (const BlockFormat &row : blocks) {
 		if (row.logical == p_format && p_device.has(row.feature)) {
-			TextureFormatInfo info;
 			info.format = row.physical;
 			info.sample_type = SampleType::FLOAT;
 			info.block_width = row.width;
@@ -297,7 +301,6 @@ TextureFormatInfo texture_format(const DeviceState &p_device, DF p_format, bool 
 			return info;
 		}
 	}
-	TextureFormatInfo info;
 	switch (p_format) {
 		case Rdc::DATA_FORMAT_D16_UNORM:
 			info.format = WGPUTextureFormat_Depth16Unorm;
@@ -337,13 +340,15 @@ TextureFormatInfo texture_format(const DeviceState &p_device, DF p_format, bool 
 	return info;
 }
 
+bool texture_swizzle_is_identity(const RDD::TextureView &p_view) {
+	const auto &v = p_view;
+	return is_identity(v.swizzle_r, Rdc::TEXTURE_SWIZZLE_R) && is_identity(v.swizzle_g, Rdc::TEXTURE_SWIZZLE_G) &&
+			is_identity(v.swizzle_b, Rdc::TEXTURE_SWIZZLE_B) && is_identity(v.swizzle_a, Rdc::TEXTURE_SWIZZLE_A);
+}
+
 bool bake_texture_swizzle(TextureFormatInfo &r_format, const RDD::TextureView &p_view, bool p_storage) {
 	const auto &v = p_view;
-	const auto is_identity = [](Rdc::TextureSwizzle p_swizzle, Rdc::TextureSwizzle p_component) {
-		return p_swizzle == p_component || p_swizzle == Rdc::TEXTURE_SWIZZLE_IDENTITY;
-	};
-	if (is_identity(v.swizzle_r, Rdc::TEXTURE_SWIZZLE_R) && is_identity(v.swizzle_g, Rdc::TEXTURE_SWIZZLE_G) &&
-			is_identity(v.swizzle_b, Rdc::TEXTURE_SWIZZLE_B) && is_identity(v.swizzle_a, Rdc::TEXTURE_SWIZZLE_A)) {
+	if (texture_swizzle_is_identity(v)) {
 		return true;
 	}
 	// Native 1/2/3-channel color formats synthesize missing RGB as 0 and A as 1 without mutating backing.

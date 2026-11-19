@@ -16,7 +16,7 @@ namespace godot::webgpu {
 namespace {
 
 auto key_fields(const CompileOptions &p) {
-	return std::tie(p.specialization, p.raw_depth, p.unfilterable_float, p.storage_formats, p.immutable_samplers,
+	return std::tie(p.specialization, p.raw_depth, p.unfilterable_float, p.storage_formats, p.atomic_images, p.immutable_samplers,
 			p.uniform_memory_fences, p.texture_barrier, p.promote_narrow_storage, p.non_uniform_derivatives, p.flip_vertex_y, p.subgroup_lowering);
 }
 

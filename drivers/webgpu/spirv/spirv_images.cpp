@@ -221,7 +221,8 @@ bool lower_images(Module &r_module, const CompileOptions &p_options) {
 	ir.module()->ForEachInst([&](Instruction *i) {
 		const Op opcode = i->opcode();
 		const bool sampled = sampling(opcode);
-		if (!sampled && opcode != Op::OpImageRead && opcode != Op::OpImageSparseRead && opcode != Op::OpImageWrite && opcode != Op::OpImageTexelPointer) {
+		const bool size_query = opcode == Op::OpImageQuerySize;
+		if (!sampled && !size_query && opcode != Op::OpImageRead && opcode != Op::OpImageSparseRead && opcode != Op::OpImageWrite && opcode != Op::OpImageTexelPointer) {
 			return;
 		}
 		const uint32_t operand = i->GetSingleWordInOperand(0);
@@ -239,7 +240,7 @@ bool lower_images(Module &r_module, const CompileOptions &p_options) {
 					}
 				}
 			}
-		} else {
+		} else if (!size_query) {
 			known_storage_uses &= !textures.empty();
 		}
 	});
@@ -281,7 +282,14 @@ bool lower_images(Module &r_module, const CompileOptions &p_options) {
 			continue;
 		}
 		format.logical_format = image.GetSingleWordInOperand(6);
-		if (format.logical_format == bits(Format::Unknown)) {
+		const auto atomic = p_options.atomic_images.find(binding.key);
+		if (atomic != p_options.atomic_images.end()) {
+			if (format.logical_format != bits(Format::Unknown) && format.logical_format != atomic->second) {
+				return r_module.fail("Atomic image buffer format disagrees with the SPIR-V image (set " + std::to_string(binding.key.set) +
+						", binding " + std::to_string(binding.key.binding) + ")");
+			}
+			format.logical_format = atomic->second;
+		} else if (format.logical_format == bits(Format::Unknown)) {
 			auto supplied = p_options.storage_formats.find(binding.key);
 			if (supplied == p_options.storage_formats.end() || supplied->second == bits(Format::Unknown)) {
 				return r_module.fail("Formatless storage image needs the real view format (set " + std::to_string(binding.key.set) +
@@ -289,7 +297,7 @@ bool lower_images(Module &r_module, const CompileOptions &p_options) {
 			}
 			format.logical_format = supplied->second;
 		}
-		if (std::any_of(uses.begin(), uses.end(), [](const Instruction *i) { return i->opcode() == Op::OpImageTexelPointer; })) {
+		if (atomic != p_options.atomic_images.end() || std::any_of(uses.begin(), uses.end(), [](const Instruction *i) { return i->opcode() == Op::OpImageTexelPointer; })) {
 			if (!lower_image_atomics(r_module, resource, uses)) {
 				return false;
 			}

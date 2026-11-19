@@ -33,6 +33,7 @@
 
 #include "core/object/class_db.h"
 #include "core/os/os.h"
+#include "servers/rendering/renderer_rd/effects/fsr2.h"
 #include "servers/rendering/renderer_rd/storage_rd/texture_storage.h"
 #include "servers/rendering/rendering_device_binds.h"
 #include "servers/rendering/rendering_server.h" // IWYU pragma: keep // Needed to bind RSE enums.
@@ -164,6 +165,10 @@ void RenderSceneBuffersRD::configure(const RenderSceneBuffersConfiguration *p_co
 	view_count = p_config->get_view_count();
 
 	scaling_3d_mode = p_config->get_scaling_3d_mode();
+	if (scaling_3d_mode == RSE::VIEWPORT_SCALING_3D_MODE_FSR2 && !RendererRD::FSR2Effect::is_supported()) {
+		WARN_PRINT_ONCE("FSR2 is not supported by this rendering device. Using bilinear 3D scaling.");
+		scaling_3d_mode = RSE::VIEWPORT_SCALING_3D_MODE_BILINEAR;
+	}
 	msaa_3d = p_config->get_msaa_3d();
 	screen_space_aa = p_config->get_screen_space_aa();
 

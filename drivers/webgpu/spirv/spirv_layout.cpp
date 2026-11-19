@@ -77,6 +77,30 @@ void count_binding(StageLimits &r_stage, Role p_role) {
 	}
 }
 
+bool remove_unused_global(IRContext &p_ir, Instruction &p_var) {
+	// Entry-point interface lists and metadata do not make a resource statically used.
+	if (!p_ir.get_def_use_mgr()->WhileEachUser(&p_var, [](const Instruction *p_use) {
+			return p_use->opcode() == Op::OpEntryPoint || p_use->opcode() == Op::OpName || p_use->opcode() == Op::OpDecorate;
+		})) {
+		return false;
+	}
+	const uint32_t result_id = p_var.result_id();
+	for (Instruction &entry : p_ir.module()->entry_points()) {
+		// The interface follows the execution model, function ID and entry-point name.
+		for (uint32_t i = 3; i < entry.NumInOperands(); ++i) {
+			if (entry.GetSingleWordInOperand(i) == result_id) {
+				p_ir.ForgetUses(&entry);
+				entry.RemoveInOperand(i);
+				p_ir.AnalyzeUses(&entry);
+				break;
+			}
+		}
+	}
+	p_ir.KillNamesAndDecorates(result_id);
+	p_ir.KillInst(&p_var);
+	return true;
+}
+
 } // namespace
 
 bool lower_push_constant(Module &r_module) {
@@ -88,7 +112,7 @@ bool lower_push_constant(Module &r_module) {
 			var = &inst;
 		}
 	}
-	if (!var) {
+	if (!var || remove_unused_global(ir, *var)) {
 		return true;
 	}
 	uint64_t size = block_extent(ir, pointee(ir, *var)->result_id());
@@ -116,8 +140,19 @@ bool lower_push_constant(Module &r_module) {
 bool plan_layout(const std::vector<std::unique_ptr<Module>> &p_modules, const CompileOptions &p_options, ShaderPlan &r_plan) {
 	std::map<BindingKey, BindingPlan> logical;
 	for (auto &module : p_modules) {
+		IRContext &ir = *module->ir;
+		auto &resources = module->resources;
+		resources.erase(std::remove_if(resources.begin(), resources.end(), [&](const Resource &p_resource) {
+			if (!remove_unused_global(ir, *def(ir, p_resource.id))) {
+				return false;
+			}
+			if (p_resource.binding.key.role == Role::PUSH_CONSTANT) {
+				module->push_size = 0;
+			}
+			return true;
+		}), resources.end());
 		r_plan.push_constant.size = std::max(r_plan.push_constant.size, module->push_size);
-		for (const auto &resource : module->resources) {
+		for (const auto &resource : resources) {
 			const BindingPlan &incoming = resource.binding;
 			auto [slot, fresh] = logical.emplace(incoming.key, incoming);
 			if (!fresh && (slot->second.read_only != incoming.read_only || slot->second.sampler_type != incoming.sampler_type ||

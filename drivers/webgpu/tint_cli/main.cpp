@@ -103,6 +103,9 @@ CompileOptions read_options(const Json::Value &p_value) {
 	for (const auto &item : p_value["storage_formats"]) {
 		options.storage_formats.emplace(read_key(item, Role::STORAGE_TEXTURE), required_u32(item["format"], "format"));
 	}
+	for (const auto &item : p_value["atomic_images"]) {
+		options.atomic_images.emplace(read_key(item, Role::STORAGE_TEXTURE), required_u32(item["format"], "format"));
+	}
 	return options;
 }
 

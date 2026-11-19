@@ -42,8 +42,8 @@ struct FormatPlan {
 	FormatConversion conversion = FormatConversion::NONE;
 	uint8_t component_bits = 0;
 	uint8_t channels = 0;
-	// An atomic image uses a storage buffer with an extent header, followed by
-	// a tightly packed array of atomic texels in x-major order.
+	// An atomic-capable image uses a storage buffer with an extent header,
+	// followed by tightly packed 32-bit texels in x-major order.
 	bool atomic_buffer = false;
 };
 
@@ -93,6 +93,8 @@ struct CompileOptions {
 	std::vector<BindingKey> raw_depth;
 	std::vector<BindingKey> unfilterable_float;
 	std::map<BindingKey, uint32_t> storage_formats; // Required for formatless storage images.
+	// R32i/R32ui formats of buffer-backed images, keyed by the original STORAGE_TEXTURE role.
+	std::map<BindingKey, uint32_t> atomic_images;
 	// Equal IDs certify equal runtime sampler descriptors. Never infer this from shader use.
 	std::map<BindingKey, uint32_t> immutable_samplers;
 	// A memory-only fence can become a convergent workgroup barrier only when the

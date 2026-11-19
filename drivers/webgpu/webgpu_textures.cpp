@@ -64,16 +64,17 @@ WGPUTextureDimension base_dimension(Rdc::TextureType p_type) {
 																									 : WGPUTextureDimension_2D;
 }
 
-TextureFormatInfo view_format(const DeviceState &p_state, const TextureBacking &p_backing, const RDD::TextureView &p_view) {
-	if (p_view.format == Rdc::DATA_FORMAT_MAX || p_view.format == p_backing.desc.format) {
-		const bool storage = (p_backing.usage & WGPUTextureUsage_StorageBinding) != 0;
-		TextureFormatInfo info = texture_format(p_state, p_backing.desc.format, storage);
-		return info.valid() && bake_texture_swizzle(info, p_view, storage) &&
-				info.format == p_backing.storage.format && info.encoding == p_backing.storage.encoding ? info : TextureFormatInfo{};
+TextureFormatInfo view_format(const DeviceState &p_state, const TextureBacking &p_backing, const TextureFormatInfo &p_source, const RDD::TextureView &p_view) {
+	const auto logical_format = p_view.format == Rdc::DATA_FORMAT_MAX ? p_source.logical_format : p_view.format;
+	if (logical_format == p_source.logical_format && texture_swizzle_is_identity(p_view)) {
+		// Identity doesn't undo an encoding baked into the allocation or change the source's sRGB/linear interpretation.
+		return p_source;
 	}
-	TextureFormatInfo info = texture_format(p_state, p_view.format, false);
-	if (!info.valid() || !bake_texture_swizzle(info, p_view, false) || info.encoding != p_backing.storage.encoding ||
-			info.logical_bytes != p_backing.storage.logical_bytes || std::find(p_backing.view_formats.begin(), p_backing.view_formats.end(), info.format) == p_backing.view_formats.end()) {
+	const bool storage = logical_format == p_backing.desc.format && (p_backing.usage & WGPUTextureUsage_StorageBinding);
+	TextureFormatInfo info = texture_format(p_state, logical_format, storage);
+	if (!info.valid() || !bake_texture_swizzle(info, p_view, storage) || info.encoding != p_backing.storage.encoding ||
+			info.logical_bytes != p_backing.storage.logical_bytes ||
+			(info.format != p_backing.storage.format && std::find(p_backing.view_formats.begin(), p_backing.view_formats.end(), info.format) == p_backing.view_formats.end())) {
 		return {};
 	}
 	return info;
@@ -85,12 +86,17 @@ bool create_atomic_backing(DeviceState &p_state, TextureBacking &r_backing) {
 		return false;
 	}
 	const uint32_t slices = format.texture_type == Rdc::TEXTURE_TYPE_3D ? format.depth : format.array_layers;
-	const uint64_t texels = uint64_t(format.width) * format.height * slices;
-	WGPUBufferDescriptor desc = WGPU_BUFFER_DESCRIPTOR_INIT;
-	desc.size = ATOMIC_IMAGE_HEADER_BYTES + texels * SPIRV_WORD_BYTES;
-	if (desc.size > p_state.limits.maxStorageBufferBindingSize || desc.size > p_state.limits.maxBufferSize || desc.size > SIZE_MAX) {
+	const uint64_t limit = std::min({ p_state.limits.maxStorageBufferBindingSize, p_state.limits.maxBufferSize, uint64_t(SIZE_MAX) });
+	if (!format.width || !format.height || !slices || limit <= ATOMIC_IMAGE_HEADER_BYTES) {
 		return false;
 	}
+	const uint64_t max_texels = std::min<uint64_t>((limit - ATOMIC_IMAGE_HEADER_BYTES) / SPIRV_WORD_BYTES, UINT32_MAX);
+	const uint64_t plane_texels = uint64_t(format.width) * format.height;
+	if (plane_texels > max_texels / slices) {
+		return false;
+	}
+	WGPUBufferDescriptor desc = WGPU_BUFFER_DESCRIPTOR_INIT;
+	desc.size = ATOMIC_IMAGE_HEADER_BYTES + plane_texels * slices * SPIRV_WORD_BYTES;
 	desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc | WGPUBufferUsage_CopyDst;
 	desc.mappedAtCreation = true;
 	r_backing.atomic_buffer.reset(wgpuDeviceCreateBuffer(p_state.device.get(), &desc));
@@ -195,7 +201,7 @@ RDD::TextureID RenderingDeviceDriverWebGPU::texture_create(const TextureFormat &
 	if (render) {
 		backing->usage |= WGPUTextureUsage_RenderAttachment;
 	}
-	if (samples == 1 && backing->dimension == WGPUTextureDimension_2D && info.renderable && !info.depth && (backing->usage & WGPUTextureUsage_CopyDst) &&
+	if (!atomic && samples == 1 && backing->dimension == WGPUTextureDimension_2D && info.renderable && !info.depth && (backing->usage & WGPUTextureUsage_CopyDst) &&
 			(!storage || info.format == texture_format(*state, p_format.format, false).format)) {
 		backing->usage |= WGPUTextureUsage_RenderAttachment; // Also supports typed clears of non-framebuffer textures.
 	}
@@ -225,14 +231,13 @@ RDD::TextureID RenderingDeviceDriverWebGPU::texture_create(const TextureFormat &
 	}
 	TextureFormatInfo primary_format = info;
 	if (p_view.format != DATA_FORMAT_MAX && p_view.format != p_format.format) {
-		primary_format = view_format(*state, *backing, p_view);
+		primary_format = view_format(*state, *backing, info, p_view);
 		ERR_FAIL_COND_V_MSG(!primary_format.valid() || render || storage || atomic, {}, "The requested primary WebGPU view format is not compatible with this texture's usage.");
 	}
 	if (atomic) {
-		// The current plan has a single buffer for all atomic operations. Do not
-		// create a stale mirror texture; 2B-2 must add an explicit handoff for mixed uses.
-		ERR_FAIL_COND_V_MSG(p_format.mipmaps != 1 || (backing->usage & ~(WGPUTextureUsage_StorageBinding | WGPUTextureUsage_CopySrc | WGPUTextureUsage_CopyDst)) || !create_atomic_backing(*state, *backing), {},
-				"Atomic WebGPU images currently require single-mip R32i/R32ui storage-only backing.");
+		ERR_FAIL_COND_V_MSG(p_format.mipmaps != 1 || dimension == WGPUTextureViewDimension_Cube || dimension == WGPUTextureViewDimension_CubeArray ||
+						(backing->usage & ~(WGPUTextureUsage_StorageBinding | WGPUTextureUsage_CopySrc | WGPUTextureUsage_CopyDst)) || !create_atomic_backing(*state, *backing),
+				{}, "Atomic WebGPU images require single-mip, non-cube R32i/R32ui storage-only backing within buffer size limits.");
 	} else {
 		WGPUTextureDescriptor desc = WGPU_TEXTURE_DESCRIPTOR_INIT;
 		desc.usage = backing->usage;
@@ -298,10 +303,12 @@ RDD::TextureID RenderingDeviceDriverWebGPU::texture_create_shared(TextureID p_te
 	const auto &src = *resource<TextureResource>(p_texture);
 	auto texture = std::make_shared<TextureResource>();
 	texture->backing = src.backing;
-	texture->format = view_format(*state, *src.backing, p_view);
+	texture->format = view_format(*state, *src.backing, src.format, p_view);
 	ERR_FAIL_COND_V_MSG(!texture->format.valid() || !src.backing->texture, {}, "No compatible WebGPU view for the requested format/swizzle.");
 	texture->dimension = src.dimension;
+	texture->base_mip = src.base_mip;
 	texture->mip_count = src.mip_count;
+	texture->base_layer = src.base_layer;
 	texture->layer_count = src.layer_count;
 	ERR_FAIL_COND_V(texture->initialize_views() != OK, {});
 	return resource_id<TextureID>(std::move(texture));
@@ -312,17 +319,22 @@ RDD::TextureID RenderingDeviceDriverWebGPU::texture_create_shared_from_slice(Tex
 	state->assert_owner();
 	const auto &src = *resource<TextureResource>(p_texture);
 	constexpr WGPUTextureViewDimension dims[] = { WGPUTextureViewDimension_2D, WGPUTextureViewDimension_Cube, WGPUTextureViewDimension_3D, WGPUTextureViewDimension_2DArray };
-	DEV_ASSERT(p_type < TEXTURE_SLICE_MAX && p_mip + p_mips <= src.mip_count);
-	ERR_FAIL_COND_V_MSG(!src.backing->texture || (src.dimension == WGPUTextureViewDimension_3D && p_type != TEXTURE_SLICE_3D), {}, "A 3D texture cannot be aliased as a 2D WebGPU view.");
+	ERR_FAIL_INDEX_V(p_type, TEXTURE_SLICE_MAX, {});
+	ERR_FAIL_COND_V_MSG(!src.backing->texture, {}, "Atomic WebGPU images do not support slice views.");
+	const auto required_dimension = p_type == TEXTURE_SLICE_3D ? WGPUTextureDimension_3D : WGPUTextureDimension_2D;
+	ERR_FAIL_COND_V_MSG(src.backing->dimension != required_dimension, {}, "The requested WebGPU slice dimension is incompatible with its backing texture.");
+	const uint32_t layers = p_type == TEXTURE_SLICE_CUBEMAP ? CUBE_LAYERS : p_layers;
+	ERR_FAIL_COND_V(p_mip >= src.mip_count || p_mips == 0 || p_mips > src.mip_count - p_mip, {});
+	ERR_FAIL_COND_V(p_layer >= src.layer_count || layers == 0 || layers > src.layer_count - p_layer, {});
 	auto texture = std::make_shared<TextureResource>();
 	texture->backing = src.backing;
-	texture->format = view_format(*state, *src.backing, p_view);
-	ERR_FAIL_COND_V(!texture->format.valid(), {});
+	texture->format = view_format(*state, *src.backing, src.format, p_view);
+	ERR_FAIL_COND_V_MSG(!texture->format.valid(), {}, "No compatible WebGPU slice view for the requested format/swizzle.");
 	texture->dimension = dims[p_type];
-	texture->base_mip = p_mip;
+	texture->base_mip = src.base_mip + p_mip;
 	texture->mip_count = p_mips;
-	texture->base_layer = p_type == TEXTURE_SLICE_3D ? 0 : p_layer;
-	texture->layer_count = p_type == TEXTURE_SLICE_CUBEMAP ? CUBE_LAYERS : p_layers;
+	texture->base_layer = src.base_layer + p_layer;
+	texture->layer_count = layers;
 	ERR_FAIL_COND_V(texture->initialize_views() != OK, {});
 	return resource_id<TextureID>(std::move(texture));
 }
@@ -388,5 +400,5 @@ bool RenderingDeviceDriverWebGPU::texture_can_make_shared_with_format(TextureID 
 	TextureView view;
 	view.format = p_format;
 	r_raw_reinterpretation = false;
-	return tex.backing->texture && view_format(*state, *tex.backing, view).valid();
+	return tex.backing->texture && view_format(*state, *tex.backing, tex.format, view).valid();
 }
