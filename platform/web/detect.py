@@ -81,6 +81,7 @@ def get_flags():
         "target": "template_debug",
         "builtin_pcre2_with_jit": False,
         "vulkan": False,
+        "webgpu": True,
         # Embree is heavy and requires too much memory (GH-70621).
         "module_raycast_enabled": False,
         # Use -Os to prioritize optimizing for reduced file size. This is
@@ -240,6 +241,68 @@ def configure(env: "SConsEnvironment"):
     # Use POSIX-style paths, required with TempFileMunge.
     env["ARCOM_POSIX"] = env["ARCOM"].replace("$TARGET", "$TARGET.posix").replace("$SOURCES", "$SOURCES.posix")
     env["ARCOM"] = "${TEMPFILE('$ARCOM_POSIX','$ARCOMSTR')}"
+    if os.name == "nt":
+        import subprocess
+        import time
+
+        # Direct CreateProcessW accepts 32,767 characters without cmd.exe or @rsp backslash escaping.
+        env["MAXLINELENGTH"] = 30000
+
+        em_dir = emcc_path.parent
+        em_py = os.environ.get("EMSDK_PYTHON") or sys.executable
+        em_tools = {name: str(em_dir / f"{name}.py") for name in ("emcc", "em++", "emar", "emranlib")}
+        old_spawn = env["SPAWN"]
+        no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+        def web_windows_spawn(sh, escape, cmd, args, spawn_env):
+            if cmd == "del" and len(args) > 1:
+                try:
+                    os.remove(args[1].strip('"'))
+                except FileNotFoundError:
+                    pass
+                return 0
+            tool_key = Path(cmd.strip('"')).stem.lower()
+            if tool_key not in em_tools:
+                return old_spawn(sh, escape, cmd, args, spawn_env)
+            cmdline = f'"{em_py}" -E "{em_tools[tool_key]}" ' + " ".join(args[1:])
+            proc_env = {str(k): str(v) for k, v in spawn_env.items()}
+            for attempt in range(3):
+                proc = subprocess.Popen(
+                    cmdline,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    shell=False,
+                    env=proc_env,
+                    creationflags=no_window,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                out, err = proc.communicate()
+                rc = proc.returncode
+                # Retry only transient Win32 STATUS_BREAKPOINT (0x80000003) process-init faults.
+                if (rc & 0xFFFFFFFF) == 0x80000003 and attempt < 2:
+                    time.sleep(0.05 * (attempt + 1))
+                    continue
+                if out:
+                    sys.stdout.write(out)
+                if err:
+                    sys.stderr.write(err)
+                return rc
+            return 1
+
+        env["SPAWN"] = web_windows_spawn
+
+    if env["webgpu"]:
+        if cc_semver < (4, 0, 11):
+            print_error("The WebGPU backend requires Emscripten 4.0.11 or later.")
+            sys.exit(255)
+        env.AppendUnique(CPPDEFINES=["WEBGPU_ENABLED", "RD_ENABLED"])
+        env.AppendUnique(CCFLAGS=["--use-port=emdawnwebgpu"], LINKFLAGS=["--use-port=emdawnwebgpu"])
+        if env["proxy_to_pthread"]:
+            print_warning("WebGPU requires the main thread to own the device; disabling proxy_to_pthread.")
+            env["proxy_to_pthread"] = False
 
     # All intermediate files are just object files.
     env["OBJPREFIX"] = ""

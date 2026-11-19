@@ -146,7 +146,7 @@ public:
 	_ALWAYS_INLINE_ virtual uint64_t get_frame_number() const override { return frame; }
 	_ALWAYS_INLINE_ virtual double get_frame_delta_time() const override { return delta; }
 	_ALWAYS_INLINE_ virtual double get_total_time() const override { return time; }
-	_ALWAYS_INLINE_ virtual bool can_create_resources_async() const override { return true; }
+	bool can_create_resources_async() const override;
 
 	virtual bool is_xr_enabled() const override { return RendererCompositor::is_xr_enabled(); }
 

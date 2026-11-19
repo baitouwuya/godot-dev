@@ -893,6 +893,11 @@ Error RenderingDevice::_insert_staging_block(StagingBuffers &p_staging_buffers) 
 
 	block.frame_used = 0;
 	block.fill_amount = 0;
+	if (driver->api_trait_get(RDD::API_TRAIT_ASYNC_GPU_COMPLETION) && p_staging_buffers.usage_bits.has_flag(RDD::BUFFER_USAGE_TRANSFER_TO_BIT)) {
+		// Download pages are mapped only after the GPU has filled them.
+		p_staging_buffers.blocks.insert(p_staging_buffers.current, block);
+		return OK;
+	}
 	block.data_ptr = driver->buffer_map(block.driver_id);
 
 	if (block.data_ptr == nullptr) {
@@ -906,6 +911,7 @@ Error RenderingDevice::_insert_staging_block(StagingBuffers &p_staging_buffers) 
 
 Error RenderingDevice::_staging_buffer_allocate(StagingBuffers &p_staging_buffers, uint32_t p_amount, uint32_t p_required_align, uint32_t &r_alloc_offset, uint32_t &r_alloc_size, StagingRequiredAction &r_required_action, bool p_can_segment) {
 	// Determine a block to use.
+	const bool asynchronous = driver->api_trait_get(RDD::API_TRAIT_ASYNC_GPU_COMPLETION);
 
 	r_alloc_size = p_amount;
 	r_required_action = STAGING_REQUIRED_ACTION_NONE;
@@ -928,7 +934,7 @@ Error RenderingDevice::_staging_buffer_allocate(StagingBuffers &p_staging_buffer
 
 			int32_t available_bytes = int32_t(p_staging_buffers.block_size) - int32_t(write_from);
 
-			if ((int32_t)p_amount < available_bytes) {
+			if ((int32_t)p_amount <= available_bytes) {
 				// All is good, we should be ok, all will fit.
 				r_alloc_offset = write_from;
 			} else if (p_can_segment && available_bytes >= (int32_t)p_required_align) {
@@ -947,7 +953,7 @@ Error RenderingDevice::_staging_buffer_allocate(StagingBuffers &p_staging_buffer
 				// Possible in a single frame.
 				if (p_staging_buffers.blocks[p_staging_buffers.current].frame_used == frames_drawn) {
 					// Guess we did.. ok, let's see if we can insert a new block.
-					if ((uint64_t)p_staging_buffers.blocks.size() * p_staging_buffers.block_size < p_staging_buffers.max_size) {
+					if (asynchronous || (uint64_t)p_staging_buffers.blocks.size() * p_staging_buffers.block_size < p_staging_buffers.max_size) {
 						// We can, so we are safe.
 						Error err = _insert_staging_block(p_staging_buffers);
 						if (err) {
@@ -975,7 +981,7 @@ Error RenderingDevice::_staging_buffer_allocate(StagingBuffers &p_staging_buffer
 			p_staging_buffers.blocks.write[p_staging_buffers.current].fill_amount = 0;
 		} else {
 			// This block may still be in use, let's not touch it unless we have to, so.. can we create a new one?
-			if ((uint64_t)p_staging_buffers.blocks.size() * p_staging_buffers.block_size < p_staging_buffers.max_size) {
+			if (asynchronous || (uint64_t)p_staging_buffers.blocks.size() * p_staging_buffers.block_size < p_staging_buffers.max_size) {
 				// We are still allowed to create a new block, so let's do that and insert it for current pos.
 				Error err = _insert_staging_block(p_staging_buffers);
 				if (err) {
@@ -1089,6 +1095,7 @@ Error RenderingDevice::_buffer_update(Buffer *p_buffer, RID p_buffer_id, uint32_
 
 	if (p_buffer->usage.has_flag(RDD::BUFFER_USAGE_DYNAMIC_PERSISTENT_BIT)) {
 		uint8_t *dst_data = driver->buffer_persistent_map_advance(p_buffer->driver_id, frames_drawn);
+		ERR_FAIL_NULL_V(dst_data, ERR_BUSY);
 
 		memcpy(dst_data + p_offset, p_data, p_size);
 		direct_copy_count++;
@@ -1287,6 +1294,7 @@ Error RenderingDevice::buffer_clear(RID p_buffer, uint32_t p_offset, uint32_t p_
 
 Vector<uint8_t> RenderingDevice::buffer_get_data(RID p_buffer, uint32_t p_offset, uint32_t p_size) {
 	ERR_RENDER_THREAD_GUARD_V(Vector<uint8_t>());
+	ERR_FAIL_COND_V_MSG(driver->api_trait_get(RDD::API_TRAIT_ASYNC_GPU_COMPLETION), {}, "This rendering driver requires buffer_get_data_async().");
 
 	Buffer *buffer = _get_buffer_from_owner(p_buffer);
 	if (!buffer) {
@@ -2672,6 +2680,7 @@ void RenderingDevice::_texture_clear_depth_stencil(RID p_texture_rid, Texture *p
 
 Vector<uint8_t> RenderingDevice::texture_get_data(RID p_texture, uint32_t p_layer) {
 	ERR_RENDER_THREAD_GUARD_V(Vector<uint8_t>());
+	ERR_FAIL_COND_V_MSG(driver->api_trait_get(RDD::API_TRAIT_ASYNC_GPU_COMPLETION), {}, "This rendering driver requires texture_get_data_async().");
 
 	Texture *tex = texture_owner.get_or_null(p_texture);
 	ERR_FAIL_NULL_V(tex, Vector<uint8_t>());
@@ -5399,7 +5408,9 @@ Error RenderingDevice::screen_prepare_for_drawing(DisplayServerEnums::WindowID p
 	RDD::FramebufferID framebuffer = driver->swap_chain_acquire_framebuffer(main_queue, it->value, resize_required);
 	if (resize_required) {
 		// Flush everything so nothing can be using the swap chain before resizing it.
-		_flush_and_stall_for_all_frames();
+		if (!driver->api_trait_get(RDD::API_TRAIT_ASYNC_GPU_COMPLETION)) {
+			_flush_and_stall_for_all_frames();
+		}
 
 		Error err = driver->swap_chain_resize(main_queue, it->value, _get_swap_chain_desired_count());
 		if (err != OK) {
@@ -5494,7 +5505,9 @@ Error RenderingDevice::screen_free(DisplayServerEnums::WindowID p_screen) {
 	ERR_FAIL_COND_V_MSG(it == screen_swap_chains.end(), FAILED, "Screen was never created.");
 
 	// Flush everything so nothing can be using the swap chain before erasing it.
-	_flush_and_stall_for_all_frames();
+	if (!driver->api_trait_get(RDD::API_TRAIT_ASYNC_GPU_COMPLETION)) {
+		_flush_and_stall_for_all_frames();
+	}
 
 	const DisplayServerEnums::WindowID screen = it->key;
 	const RDD::SwapChainID swap_chain = it->value;
@@ -7292,7 +7305,11 @@ void RenderingDevice::_submit_transfer_worker(TransferWorker *p_transfer_worker,
 }
 
 void RenderingDevice::_wait_for_transfer_worker(TransferWorker *p_transfer_worker) {
-	driver->fence_wait(p_transfer_worker->command_fence);
+	if (!driver->api_trait_get(RDD::API_TRAIT_ASYNC_GPU_COMPLETION)) {
+		driver->fence_wait(p_transfer_worker->command_fence);
+	}
+	// For serial-retired drivers, only CPU upload scratch is reused here.
+	// The driver snapshots the upload at encoding and the ordered queue owns the dependency.
 	driver->command_pool_reset(p_transfer_worker->command_pool);
 	p_transfer_worker->staging_buffer_size_in_use = 0;
 	p_transfer_worker->submitted = false;
@@ -7867,6 +7884,7 @@ RenderingDevice::DriverWorkarounds RenderingDevice::get_driver_workarounds() con
 
 void RenderingDevice::swap_buffers(bool p_present) {
 	ERR_RENDER_THREAD_GUARD();
+	ERR_FAIL_COND_MSG(poll_next_frame() != OK, "Next RenderingDevice frame slot must be ready before swapping.");
 
 	GodotProfileZoneGroupedFirst(_profile_zone, "_end_frame");
 	_end_frame();
@@ -7895,9 +7913,24 @@ void RenderingDevice::sync() {
 	ERR_RENDER_THREAD_GUARD();
 	ERR_FAIL_COND_MSG(is_main_instance, "Only local devices can submit and sync.");
 	ERR_FAIL_COND_MSG(!local_device_processing, "sync can only be called after a submit");
+	ERR_FAIL_COND_MSG(!can_sync(), "The submitted work is still pending; poll can_sync() on a later event-loop turn.");
 
 	_begin_frame(true);
 	local_device_processing = false;
+}
+
+Error RenderingDevice::poll_next_frame() {
+	if (!driver->api_trait_get(RDD::API_TRAIT_ASYNC_GPU_COMPLETION)) {
+		return OK;
+	}
+	const Frame &next = frames[(frame + 1) % frames.size()];
+	return next.fence_signaled ? driver->fence_wait(next.fence) : OK;
+}
+
+bool RenderingDevice::can_sync() {
+	ERR_RENDER_THREAD_GUARD_V(false);
+	ERR_FAIL_COND_V_MSG(is_main_instance, false, "Only local devices can submit and sync.");
+	return local_device_processing && (!driver->api_trait_get(RDD::API_TRAIT_ASYNC_GPU_COMPLETION) || driver->fence_wait(frames[frame].fence) == OK);
 }
 
 void RenderingDevice::_free_pending_resources(int p_frame) {
@@ -8048,7 +8081,7 @@ uint64_t RenderingDevice::get_memory_usage(MemoryType p_type) const {
 void RenderingDevice::_begin_frame(bool p_presented) {
 	GodotProfileZoneGroupedFirst(_profile_zone, "_stall_for_frame");
 	// Before writing to this frame, wait for it to be finished.
-	_stall_for_frame(frame);
+	ERR_FAIL_COND(!_stall_for_frame(frame));
 
 	if (command_pool_reset_enabled) {
 		GodotProfileZoneGrouped(_profile_zone, "driver->command_pool_reset");
@@ -8211,12 +8244,15 @@ void RenderingDevice::_execute_frame(bool p_present) {
 	}
 }
 
-void RenderingDevice::_stall_for_frame(uint32_t p_frame) {
+bool RenderingDevice::_stall_for_frame(uint32_t p_frame) {
 	thread_local PackedByteArray packed_byte_array;
 
 	if (frames[p_frame].fence_signaled) {
 		GodotProfileZoneGroupedFirst(_profile_zone, "driver->fence_wait");
-		driver->fence_wait(frames[p_frame].fence);
+		const Error wait = driver->fence_wait(frames[p_frame].fence);
+		if (driver->api_trait_get(RDD::API_TRAIT_ASYNC_GPU_COMPLETION) && wait != OK) {
+			return false;
+		}
 		frames[p_frame].fence_signaled = false;
 
 		// Flush any pending requests for asynchronous buffer downloads.
@@ -8231,6 +8267,10 @@ void RenderingDevice::_stall_for_frame(uint32_t p_frame) {
 					uint32_t local_index = request.frame_local_index + j;
 					const RDD::BufferCopyRegion &region = frames[p_frame].download_buffer_copy_regions[local_index];
 					uint8_t *buffer_data = driver->buffer_map(frames[p_frame].download_buffer_staging_buffers[local_index]);
+					if (!buffer_data) {
+						packed_byte_array.clear();
+						break;
+					}
 					memcpy(&packed_byte_array.write[array_offset], &buffer_data[region.dst_offset], region.size);
 					driver->buffer_unmap(frames[p_frame].download_buffer_staging_buffers[local_index]);
 					array_offset += region.size;
@@ -8270,6 +8310,10 @@ void RenderingDevice::_stall_for_frame(uint32_t p_frame) {
 					uint32_t region_h = MIN(region_size, h - region.texture_offset.y);
 
 					uint8_t *buffer_data = driver->buffer_map(frames[p_frame].download_texture_staging_buffers[local_index]);
+					if (!buffer_data) {
+						packed_byte_array.clear();
+						break;
+					}
 					const uint8_t *read_ptr = buffer_data + region.buffer_offset;
 					uint8_t *write_ptr = packed_byte_array.ptrw() + frames[p_frame].download_texture_mipmap_offsets[local_index];
 					uint32_t unit_size = pixel_size;
@@ -8297,6 +8341,7 @@ void RenderingDevice::_stall_for_frame(uint32_t p_frame) {
 			frames[p_frame].download_texture_get_data_requests.clear();
 		}
 	}
+	return true;
 }
 
 void RenderingDevice::_stall_for_previous_frames() {
@@ -8531,7 +8576,9 @@ Error RenderingDevice::initialize(RenderingContextDriver *p_context, DisplayServ
 
 	for (uint32_t i = 0; i < frames.size(); i++) {
 		// Reset all queries in a query pool before doing any operations with them..
-		driver->command_timestamp_query_pool_reset(frames[0].command_buffer, frames[i].timestamp_pool, max_timestamp_query_elements);
+		if (frames[i].timestamp_pool) {
+			driver->command_timestamp_query_pool_reset(frames[0].command_buffer, frames[i].timestamp_pool, max_timestamp_query_elements);
+		}
 	}
 
 	// Convert block size from KB.
@@ -8698,6 +8745,9 @@ void RenderingDevice::_free_rids(T &p_owner, const char *p_type) {
 
 void RenderingDevice::capture_timestamp(const String &p_name) {
 	ERR_RENDER_THREAD_GUARD();
+	if (!frames[frame].timestamp_pool) {
+		return;
+	}
 
 	ERR_FAIL_COND_MSG(draw_list.active && draw_list.state.draw_count > 0, "Capturing timestamps during draw list creation is not allowed. Offending timestamp was: " + p_name);
 	ERR_FAIL_COND_MSG(compute_list.active && compute_list.state.dispatch_count > 0, "Capturing timestamps during compute list creation is not allowed. Offending timestamp was: " + p_name);
@@ -8860,15 +8910,18 @@ uint64_t RenderingDevice::limit_get(Limit p_limit) const {
 
 void RenderingDevice::finalize() {
 	ERR_RENDER_THREAD_GUARD();
+	const bool asynchronous = driver && driver->api_trait_get(RDD::API_TRAIT_ASYNC_GPU_COMPLETION);
 
-	if (!frames.is_empty()) {
+	if (!frames.is_empty() && !asynchronous) {
 		// Wait for all frames to have finished rendering.
 		_flush_and_stall_for_all_frames(false);
 	}
 
 	// Wait for transfer workers to finish.
-	_submit_transfer_workers();
-	_wait_for_transfer_workers();
+	if (!asynchronous) {
+		_submit_transfer_workers();
+		_wait_for_transfer_workers();
+	}
 
 	// Delete everything the graph has created.
 	draw_graph.finalize();
@@ -8933,7 +8986,9 @@ void RenderingDevice::finalize() {
 		int f = (frame + i) % frames.size();
 		_free_pending_resources(f);
 		driver->command_pool_free(frames[i].command_pool);
-		driver->timestamp_query_pool_free(frames[i].timestamp_pool);
+		if (frames[i].timestamp_pool) {
+			driver->timestamp_query_pool_free(frames[i].timestamp_pool);
+		}
 		driver->semaphore_free(frames[i].semaphore);
 		driver->fence_free(frames[i].fence);
 
@@ -8960,7 +9015,9 @@ void RenderingDevice::finalize() {
 	}
 
 	for (int i = 0; i < download_staging_buffers.blocks.size(); i++) {
-		driver->buffer_unmap(download_staging_buffers.blocks[i].driver_id);
+		if (download_staging_buffers.blocks[i].data_ptr) {
+			driver->buffer_unmap(download_staging_buffers.blocks[i].driver_id);
+		}
 		driver->buffer_free(download_staging_buffers.blocks[i].driver_id);
 	}
 
@@ -9208,6 +9265,7 @@ void RenderingDevice::_bind_methods() {
 #endif
 
 	ClassDB::bind_method(D_METHOD("create_local_device"), &RenderingDevice::create_local_device);
+	ClassDB::bind_method(D_METHOD("can_sync"), &RenderingDevice::can_sync);
 
 	ClassDB::bind_method(D_METHOD("set_resource_name", "id", "name"), &RenderingDevice::set_resource_name);
 

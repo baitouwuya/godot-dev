@@ -53,6 +53,12 @@ ToneMapper::ToneMapper(bool p_use_mobile_version) {
 		tonemap_modes.push_back("\n#define USE_MULTIVIEW\n#define SUBPASS\n#define USE_1D_LUT\n");
 
 		tonemap_mobile.shader.initialize(tonemap_modes);
+		if (!RD::get_singleton()->get_driver_trait(RDD::API_TRAIT_SUPPORTS_INPUT_ATTACHMENTS)) {
+			tonemap_mobile.shader.set_variant_enabled(TONEMAP_MOBILE_MODE_SUBPASS, false);
+			tonemap_mobile.shader.set_variant_enabled(TONEMAP_MOBILE_MODE_SUBPASS_1D_LUT, false);
+			tonemap_mobile.shader.set_variant_enabled(TONEMAP_MOBILE_MODE_SUBPASS_MULTIVIEW, false);
+			tonemap_mobile.shader.set_variant_enabled(TONEMAP_MOBILE_MODE_SUBPASS_1D_LUT_MULTIVIEW, false);
+		}
 
 		if (!RendererCompositorRD::get_singleton()->is_xr_enabled()) {
 			tonemap_mobile.shader.set_variant_enabled(TONEMAP_MOBILE_MODE_NORMAL_MULTIVIEW, false);

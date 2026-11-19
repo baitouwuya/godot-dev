@@ -799,6 +799,13 @@ public:
 
 	RID sdfgi_ubo;
 
+private:
+	bool sdfgi_supported = false;
+	void _init_sdfgi_pipelines(SkyRD *p_sky);
+
+public:
+	bool is_sdfgi_supported() const { return sdfgi_supported; }
+
 	enum Group {
 		GROUP_NORMAL,
 		GROUP_VRS,

@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 from misc.utility.scons_hints import *
 
+import json
+
 from methods import print_error
 
 Import("env")
@@ -34,6 +36,9 @@ if env["target"] == "editor":
     env.add_source_files(web_files, "editor/*.cpp")
 
 sys_env = env.Clone()
+rendering_drivers = [name for option, name in (("webgpu", "webgpu"), ("opengl3", "opengl3")) if env[option]]
+backend_config = env.Textfile("#bin/godot${PROGSUFFIX}.backends.js", [f"Module['godotRenderingDrivers'] = {json.dumps(rendering_drivers)};"])
+sys_env.Append(JS_PRE=backend_config)
 sys_env.AddJSLibraries([
     "js/libs/library_godot_audio.js",
     "js/libs/library_godot_display.js",
@@ -55,18 +60,20 @@ sys_env.AddJSPost([
 
 if env["javascript_eval"]:
     sys_env.AddJSLibraries(["js/libs/library_godot_javascript_singleton.js"])
+if env["webgpu"]:
+    sys_env.AddJSLibraries(["js/libs/library_godot_webgpu.js"])
 
 for lib in sys_env["JS_LIBS"]:
-    sys_env.Append(LINKFLAGS=["--js-library", lib.abspath])
+    sys_env.Append(LINKFLAGS=["--js-library", lib.abspath.replace("\\", "/")])
 for js in sys_env["JS_PRE"]:
-    sys_env.Append(LINKFLAGS=["--pre-js", js.abspath])
+    sys_env.Append(LINKFLAGS=["--pre-js", js.abspath.replace("\\", "/")])
 for js in sys_env["JS_POST"]:
-    sys_env.Append(LINKFLAGS=["--post-js", js.abspath])
+    sys_env.Append(LINKFLAGS=["--post-js", js.abspath.replace("\\", "/")])
 
 # Add JS externs to Closure.
 sys_env["ENV"]["EMCC_CLOSURE_ARGS"] = sys_env["ENV"].get("EMCC_CLOSURE_ARGS", "")
 for ext in sys_env["JS_EXTERNS"]:
-    sys_env["ENV"]["EMCC_CLOSURE_ARGS"] += " --externs " + ext.abspath
+    sys_env["ENV"]["EMCC_CLOSURE_ARGS"] += " --externs " + ext.abspath.replace("\\", "/")
 sys_env["ENV"]["EMCC_CLOSURE_ARGS"] = sys_env["ENV"]["EMCC_CLOSURE_ARGS"].strip()
 
 if len(env["EXPORTED_FUNCTIONS"]):

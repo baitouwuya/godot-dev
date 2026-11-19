@@ -1068,7 +1068,11 @@ layout(location = 0) out vec4 frag_color;
 #endif // RENDER DEPTH
 
 #ifdef MOTION_VECTORS
+#ifdef RENDER_DRIVER_WEBGPU
+layout(location = 2) out vec4 motion_vector;
+#else
 layout(location = 2) out vec2 motion_vector;
+#endif
 #endif
 
 #include "../scene_forward_aa_inc.glsl"
@@ -2592,7 +2596,7 @@ void fragment_shader(in SceneData scene_data) {
 					vec4 trans_coord = directional_lights.data[i].shadow_matrix1 * trans_vertex;
 					trans_coord /= trans_coord.w;
 
-					float shadow_z = textureLod(sampler2D(directional_shadow_atlas, SAMPLER_LINEAR_CLAMP), trans_coord.xy, 0.0).r;
+					float shadow_z = textureLod(sampler2D(directional_shadow_atlas, SHADOW_DEPTH_SAMPLER), trans_coord.xy, 0.0).r;
 					shadow_z *= directional_lights.data[i].shadow_z_range.x;
 					float z = trans_coord.z * directional_lights.data[i].shadow_z_range.x;
 
@@ -2602,7 +2606,7 @@ void fragment_shader(in SceneData scene_data) {
 					vec4 trans_coord = directional_lights.data[i].shadow_matrix2 * trans_vertex;
 					trans_coord /= trans_coord.w;
 
-					float shadow_z = textureLod(sampler2D(directional_shadow_atlas, SAMPLER_LINEAR_CLAMP), trans_coord.xy, 0.0).r;
+					float shadow_z = textureLod(sampler2D(directional_shadow_atlas, SHADOW_DEPTH_SAMPLER), trans_coord.xy, 0.0).r;
 					shadow_z *= directional_lights.data[i].shadow_z_range.y;
 					float z = trans_coord.z * directional_lights.data[i].shadow_z_range.y;
 
@@ -2612,7 +2616,7 @@ void fragment_shader(in SceneData scene_data) {
 					vec4 trans_coord = directional_lights.data[i].shadow_matrix3 * trans_vertex;
 					trans_coord /= trans_coord.w;
 
-					float shadow_z = textureLod(sampler2D(directional_shadow_atlas, SAMPLER_LINEAR_CLAMP), trans_coord.xy, 0.0).r;
+					float shadow_z = textureLod(sampler2D(directional_shadow_atlas, SHADOW_DEPTH_SAMPLER), trans_coord.xy, 0.0).r;
 					shadow_z *= directional_lights.data[i].shadow_z_range.z;
 					float z = trans_coord.z * directional_lights.data[i].shadow_z_range.z;
 
@@ -2622,7 +2626,7 @@ void fragment_shader(in SceneData scene_data) {
 					vec4 trans_coord = directional_lights.data[i].shadow_matrix4 * trans_vertex;
 					trans_coord /= trans_coord.w;
 
-					float shadow_z = textureLod(sampler2D(directional_shadow_atlas, SAMPLER_LINEAR_CLAMP), trans_coord.xy, 0.0).r;
+					float shadow_z = textureLod(sampler2D(directional_shadow_atlas, SHADOW_DEPTH_SAMPLER), trans_coord.xy, 0.0).r;
 					shadow_z *= directional_lights.data[i].shadow_z_range.w;
 					float z = trans_coord.z * directional_lights.data[i].shadow_z_range.w;
 
@@ -3109,7 +3113,11 @@ void fragment_shader(in SceneData scene_data) {
 	vec2 position_uv = position_clip * vec2(0.5, 0.5);
 	vec2 prev_position_uv = prev_position_clip * vec2(0.5, 0.5);
 
+#ifdef RENDER_DRIVER_WEBGPU
+	motion_vector = vec4(prev_position_uv - position_uv, 0.0, 1.0);
+#else
 	motion_vector = prev_position_uv - position_uv;
+#endif
 #endif
 }
 

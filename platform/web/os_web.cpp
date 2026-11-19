@@ -44,6 +44,10 @@
 #include "drivers/unix/file_access_unix.h"
 #include "main/main.h"
 
+#ifdef RD_ENABLED
+#include "servers/rendering/rendering_device.h"
+#endif
+
 #include <dlfcn.h>
 #include <emscripten.h>
 
@@ -86,6 +90,15 @@ bool OS_Web::main_loop_iterate() {
 
 	DisplayServer::get_singleton()->process_events();
 
+#ifdef RD_ENABLED
+	if (RenderingDevice *rd = RenderingDevice::get_singleton()) {
+		const Error status = rd->poll_next_frame();
+		if (status == ERR_BUSY) {
+			return false; // Return to JS so queue and MapAsync callbacks can run.
+		}
+		ERR_FAIL_COND_V_MSG(status != OK, true, "Web rendering device or asynchronous readback failed.");
+	}
+#endif
 	return Main::iteration();
 }
 

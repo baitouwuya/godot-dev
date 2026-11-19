@@ -172,10 +172,17 @@ extern EMSCRIPTEN_KEEPALIVE int godot_web_main(int argc, char *argv[]) {
 		SceneTree::get_singleton()->get_root()->emit_signal(SNAME("files_dropped"), ps);
 	}
 #endif
-	emscripten_set_main_loop(main_loop_callback, -1, false);
-	// Immediately run the first iteration.
-	// We are inside an animation frame, we want to immediately draw on the newly setup canvas.
-	main_loop_callback();
+	// Run the first iteration before arming the rAF loop so startup errors reject
+	// startGame() cleanly without leaving a half-open frame re-entering on rAF.
+	if (DisplayServerWeb::get_singleton()->check_size_force_redraw()) {
+		Main::force_redraw();
+	}
+	if (os->main_loop_iterate()) {
+		emscripten_set_main_loop(exit_callback, -1, false);
+		godot_js_os_finish_async(cleanup_after_sync);
+	} else {
+		emscripten_set_main_loop(main_loop_callback, -1, false);
+	}
 
 	return os->get_exit_code();
 }

@@ -273,7 +273,10 @@ RD::DataFormat RenderForwardClustered::RenderBufferDataForwardClustered::get_vox
 }
 
 uint32_t RenderForwardClustered::RenderBufferDataForwardClustered::get_voxelgi_usage_bits(bool p_resolve, bool p_msaa, bool p_storage) {
-	return RenderSceneBuffersRD::get_color_usage_bits(p_resolve, p_msaa, p_storage);
+	if (p_resolve) {
+		return RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT | (p_storage ? RD::TEXTURE_USAGE_STORAGE_BIT : 0);
+	}
+	return RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | (p_msaa ? RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT : 0);
 }
 
 void RenderForwardClustered::setup_render_buffer_data(Ref<RenderSceneBuffersRD> p_render_buffers) {
@@ -1874,7 +1877,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		}
 
 		if (p_render_data->environment.is_valid()) {
-			if (environment_get_sdfgi_enabled(p_render_data->environment) && get_debug_draw_mode() != RSE::VIEWPORT_DEBUG_DRAW_UNSHADED) {
+			if (gi.is_sdfgi_supported() && environment_get_sdfgi_enabled(p_render_data->environment) && get_debug_draw_mode() != RSE::VIEWPORT_DEBUG_DRAW_UNSHADED) {
 				using_sdfgi = true;
 			}
 			if (environment_get_ssr_enabled(p_render_data->environment)) {
@@ -4031,7 +4034,11 @@ void RenderForwardClustered::sdfgi_update(const Ref<RenderSceneBuffers> &p_rende
 		sdfgi = rb->get_custom_data(RB_SCOPE_SDFGI);
 	}
 
-	bool needs_sdfgi = p_environment.is_valid() && environment_get_sdfgi_enabled(p_environment);
+	const bool requested = p_environment.is_valid() && environment_get_sdfgi_enabled(p_environment);
+	if (requested && !gi.is_sdfgi_supported()) {
+		WARN_PRINT_ONCE("SDFGI requires at least 15 storage textures per compute stage, storage texture barriers, and extended read-write storage formats. SDFGI is disabled on this device.");
+	}
+	bool needs_sdfgi = requested && gi.is_sdfgi_supported();
 	bool needs_reset = sdfgi.is_valid() ? sdfgi->version != gi.sdfgi_current_version : false;
 
 	if (!needs_sdfgi || needs_reset) {

@@ -18,6 +18,10 @@ const EngineConfig = {}; // eslint-disable-line no-unused-vars
  */
 const InternalConfig = function (initConfig) { // eslint-disable-line no-unused-vars
 	const cfg = /** @lends {InternalConfig.prototype} */ {
+		/** @type {string} */
+		renderingMethod: 'gl_compatibility',
+		/** @type {string} */
+		renderingDriver: '',
 		/**
 		 * Whether to unload the engine automatically after the instance is initialized.
 		 *
@@ -258,6 +262,8 @@ const InternalConfig = function (initConfig) { // eslint-disable-line no-unused-
 
 		// Godot config
 		this.canvas = parse('canvas', this.canvas);
+		this.renderingMethod = parse('renderingMethod', this.renderingMethod);
+		this.renderingDriver = parse('renderingDriver', this.renderingDriver);
 		this.executable = parse('executable', this.executable);
 		this.mainPack = parse('mainPack', this.mainPack);
 		this.locale = parse('locale', this.locale);
@@ -274,6 +280,115 @@ const InternalConfig = function (initConfig) { // eslint-disable-line no-unused-
 		this.args = parse('args', this.args);
 		this.onExecute = parse('onExecute', this.onExecute);
 		this.onExit = parse('onExit', this.onExit);
+	};
+
+	// Minimums for the built-in corpus, including the Mobile lightmap/uber
+	// variants. Per-pipeline validation still checks plans with user materials.
+	const rdLimits = {
+		// Forward+ also has the compositor's 48-sampled-texture floor. Its
+		// octmap filter needs six storage textures (SSAO downsample needs five).
+		'forward_plus': { 'maxSampledTexturesPerShaderStage': 48, 'maxSamplersPerShaderStage': 8, 'maxStorageBuffersPerShaderStage': 10, 'maxStorageTexturesPerShaderStage': 6, 'maxUniformBuffersPerShaderStage': 6 },
+		'mobile': { 'maxSampledTexturesPerShaderStage': 29, 'maxSamplersPerShaderStage': 7, 'maxStorageBuffersPerShaderStage': 9, 'maxStorageTexturesPerShaderStage': 4, 'maxUniformBuffersPerShaderStage': 3 },
+	};
+	const requestedLimits = [
+		'maxBindGroups', 'maxBindGroupsPlusVertexBuffers', 'maxBindingsPerBindGroup',
+		'maxDynamicUniformBuffersPerPipelineLayout', 'maxDynamicStorageBuffersPerPipelineLayout',
+		'maxSampledTexturesPerShaderStage', 'maxSamplersPerShaderStage', 'maxStorageBuffersPerShaderStage',
+		'maxStorageTexturesPerShaderStage', 'maxUniformBuffersPerShaderStage', 'maxStorageBufferBindingSize',
+		'maxUniformBufferBindingSize', 'maxBufferSize', 'maxComputeWorkgroupStorageSize', 'maxComputeInvocationsPerWorkgroup',
+		'maxComputeWorkgroupSizeX', 'maxComputeWorkgroupSizeY', 'maxComputeWorkgroupSizeZ', 'maxComputeWorkgroupsPerDimension',
+		'maxColorAttachments', 'maxColorAttachmentBytesPerSample', 'maxInterStageShaderVariables',
+		'maxTextureDimension1D', 'maxTextureDimension2D', 'maxTextureDimension3D', 'maxTextureArrayLayers',
+		'maxVertexBuffers', 'maxVertexAttributes', 'maxVertexBufferArrayStride',
+		'minUniformBufferOffsetAlignment', 'minStorageBufferOffsetAlignment',
+	];
+	const optionalFeatures = [
+		'timestamp-query', 'float32-filterable', 'float32-blendable', 'rg11b10ufloat-renderable',
+		'depth32float-stencil8', 'depth-clip-control', 'clip-distances', 'dual-source-blending', 'subgroups',
+		'texture-compression-bc', 'texture-compression-etc2', 'texture-compression-astc',
+		'indirect-first-instance', 'shader-f16', 'bgra8unorm-storage',
+		'texture-formats-tier1', 'texture-formats-tier2',
+	];
+
+	/** @ignore */
+	Config.prototype.negotiateRendering = async function (templateDrivers) {
+		const drivers = templateDrivers || ['opengl3']; // Old custom templates expose only WebGL2.
+		let method = this.renderingMethod;
+		let driver = this.renderingDriver;
+		let methodArg = false;
+		let driverArg = false;
+		const args = [];
+		for (let i = 0; i < this.args.length; i++) {
+			const arg = this.args[i];
+			if (arg === '--' || arg === '++') {
+				args.push(...this.args.slice(i));
+				break;
+			}
+			if (arg === '--rendering-method' && i + 1 < this.args.length) {
+				method = this.args[++i];
+				methodArg = true;
+			} else if (arg === '--rendering-driver' && i + 1 < this.args.length) {
+				driver = this.args[++i];
+				driverArg = true;
+			} else {
+				args.push(arg);
+			}
+		}
+		if (methodArg && !driverArg) {
+			driver = ''; // A CLI method overrides the exported method/driver pair.
+		} else if (driverArg && !methodArg) {
+			method = driver === 'webgpu' ? 'forward_plus' : 'gl_compatibility';
+		}
+		if (driver === 'dummy' || method === 'dummy' || args.includes('--headless')) {
+			return { args: this.args, state: { 'requestedMethod': method, 'method': 'dummy', 'driver': 'dummy', 'reason': '' }, device: null };
+		}
+		function selected(chosenMethod, chosenDriver, reason, device) {
+			return {
+				args: ['--rendering-driver', chosenDriver, '--rendering-method', chosenMethod, ...args],
+				state: { 'requestedMethod': method, 'method': chosenMethod, 'driver': chosenDriver, 'reason': reason },
+				device: device,
+			};
+		}
+		if ((driver === 'opengl3' || method === 'gl_compatibility') && drivers.includes('opengl3')) {
+			return selected('gl_compatibility', 'opengl3', '', null);
+		}
+		let reason = 'This template does not include WebGPU.';
+		const gpu = navigator['gpu'];
+		if (drivers.includes('webgpu') && gpu) {
+			try {
+				const adapter = await gpu['requestAdapter']();
+				if (!adapter) {
+					throw new Error('No WebGPU adapter is available.');
+				}
+				const limits = {};
+				for (const name of requestedLimits) {
+					if (Number.isSafeInteger(adapter['limits'][name])) {
+						limits[name] = adapter['limits'][name];
+					}
+				}
+				const features = optionalFeatures.filter((feature) => adapter['features']['has'](feature));
+				const device = await adapter['requestDevice']({ 'requiredLimits': limits, 'requiredFeatures': features });
+				const supported = (candidate) => device['limits']['maxBindGroups'] >= 4
+					&& Object.entries(rdLimits[candidate]).every(([name, count]) => device['limits'][name] >= count);
+				if (method === 'forward_plus' && supported('forward_plus') && device['features']['has']('depth-clip-control')
+						&& gpu['wgslLanguageFeatures'] && gpu['wgslLanguageFeatures']['has']('readonly_and_readwrite_storage_textures')) {
+					return selected('forward_plus', 'webgpu', '', device);
+				}
+				if (supported('mobile')) {
+					return selected('mobile', 'webgpu', method === 'mobile' ? '' : 'Forward+ requirements were not met.', device);
+				}
+				device['destroy']();
+				reason = 'WebGPU device limits do not cover the built-in Mobile shader variants.';
+			} catch (error) {
+				reason = `WebGPU device negotiation failed: ${error.message}`;
+			}
+		} else if (drivers.includes('webgpu')) {
+			reason = 'WebGPU is not available in this browser context.';
+		}
+		if (drivers.includes('opengl3') && Features.isWebGLAvailable(2)) {
+			return selected('gl_compatibility', 'opengl3', reason, null);
+		}
+		throw new Error(`${reason} No WebGL2 fallback is available.`);
 	};
 
 	/**

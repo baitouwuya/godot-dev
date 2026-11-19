@@ -61,7 +61,8 @@ CopyEffects::CopyEffects(BitField<RasterEffects> p_raster_effects) {
 		blur_modes.push_back("\n#define MODE_COPY\n"); // BLUR_MODE_COPY
 		blur_modes.push_back("\n#define MODE_SET_COLOR\n"); // BLUR_MODE_SET_COLOR
 
-		blur_raster.shader.initialize(blur_modes);
+		const bool native_border = RD::get_singleton()->get_driver_trait(RDD::API_TRAIT_SUPPORTS_CLAMP_TO_BORDER);
+		blur_raster.shader.initialize(blur_modes, native_border ? "" : "\n#define EMULATE_TRANSPARENT_BORDER\n");
 		memset(&blur_raster.push_constant, 0, sizeof(BlurRasterPushConstant));
 		blur_raster.shader_version = blur_raster.shader.version_create();
 
@@ -72,8 +73,8 @@ CopyEffects::CopyEffects(BitField<RasterEffects> p_raster_effects) {
 		RD::SamplerState sampler_state;
 		sampler_state.mag_filter = RD::SAMPLER_FILTER_LINEAR;
 		sampler_state.min_filter = RD::SAMPLER_FILTER_LINEAR;
-		sampler_state.repeat_u = RD::SAMPLER_REPEAT_MODE_CLAMP_TO_BORDER;
-		sampler_state.repeat_v = RD::SAMPLER_REPEAT_MODE_CLAMP_TO_BORDER;
+		sampler_state.repeat_u = native_border ? RD::SAMPLER_REPEAT_MODE_CLAMP_TO_BORDER : RD::SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE;
+		sampler_state.repeat_v = sampler_state.repeat_u;
 		sampler_state.border_color = RD::SAMPLER_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
 
 		blur_raster.glow_sampler = RD::get_singleton()->sampler_create(sampler_state);

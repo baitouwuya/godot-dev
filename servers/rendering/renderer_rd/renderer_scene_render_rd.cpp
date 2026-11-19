@@ -1854,7 +1854,8 @@ void RendererSceneRenderRD::init() {
 		raster_effects.set_flag(RendererRD::CopyEffects::RASTER_EFFECT_GAUSSIAN_BLUR);
 
 		// This path can be used to redirect certain devices to use the raster version of the effect, either due to performance, lack of capabilities, or driver errors.
-		bool use_raster_for_octmaps = false;
+		// The high-quality compute filter binds all six output mips.
+		bool use_raster_for_octmaps = RD::get_singleton()->limit_get(RD::LIMIT_MAX_STORAGE_IMAGES_PER_SHADER_STAGE) < 6;
 
 		// Some devices may not support the A2B10G10R10 format as a storage image on the Mobile renderer.
 		if (!RD::get_singleton()->texture_is_format_supported_for_usage(_render_buffers_get_preferred_color_format(), RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT)) {

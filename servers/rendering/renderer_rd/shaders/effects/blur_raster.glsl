@@ -68,10 +68,28 @@ vec3 screen_space_dither(vec2 frag_coord, float bit_alignment_diviser) {
 
 layout(location = 0) out vec4 frag_color;
 
+#if defined(MODE_GLOW_DOWNSAMPLE) || defined(MODE_GLOW_GATHER)
+vec4 sample_glow_source(vec2 uv) {
+#ifdef EMULATE_TRANSPARENT_BORDER
+	// For a linear sample, only the part of the bilinear footprint inside the
+	// texture contributes. The sampler itself clamps to the real edge texels.
+	vec2 size = vec2(textureSize(source_color, 0));
+	vec2 texel = uv * size - 0.5;
+	vec2 weight = clamp(min(texel + 1.0, size - texel), 0.0, 1.0);
+	if (weight.x == 0.0 || weight.y == 0.0) {
+		return vec4(0.0);
+	}
+	return textureLod(source_color, uv, 0.0) * (weight.x * weight.y);
+#else
+	return textureLod(source_color, uv, 0.0);
+#endif
+}
+#endif
+
 #ifdef MODE_GLOW_DOWNSAMPLE
 
 // https://www.shadertoy.com/view/mdsyDf
-vec4 BloomDownKernel4(sampler2D Tex, vec2 uv0) {
+vec4 BloomDownKernel4(vec2 uv0) {
 	vec2 RcpSrcTexRes = blur.source_pixel_size;
 
 	vec2 tc = (uv0 * 2.0 + 1.0) * RcpSrcTexRes;
@@ -81,10 +99,10 @@ vec4 BloomDownKernel4(sampler2D Tex, vec2 uv0) {
 	vec2 o = (0.5 + la) * RcpSrcTexRes;
 
 	vec4 c = vec4(0.0);
-	c += textureLod(Tex, tc + vec2(-1.0, -1.0) * o, 0.0) * 0.25;
-	c += textureLod(Tex, tc + vec2(1.0, -1.0) * o, 0.0) * 0.25;
-	c += textureLod(Tex, tc + vec2(-1.0, 1.0) * o, 0.0) * 0.25;
-	c += textureLod(Tex, tc + vec2(1.0, 1.0) * o, 0.0) * 0.25;
+	c += sample_glow_source(tc + vec2(-1.0, -1.0) * o) * 0.25;
+	c += sample_glow_source(tc + vec2(1.0, -1.0) * o) * 0.25;
+	c += sample_glow_source(tc + vec2(-1.0, 1.0) * o) * 0.25;
+	c += sample_glow_source(tc + vec2(1.0, 1.0) * o) * 0.25;
 
 	return c;
 }
@@ -187,10 +205,10 @@ void main() {
 
 	// We skipped a level, so gather 16 closest samples now.
 
-	vec4 color = textureLod(source_color, (block_pos + vec2(1.0, 1.0)) * blur.source_pixel_size, 0.0);
-	color += textureLod(source_color, (block_pos + vec2(1.0, 3.0)) * blur.source_pixel_size, 0.0);
-	color += textureLod(source_color, (block_pos + vec2(3.0, 1.0)) * blur.source_pixel_size, 0.0);
-	color += textureLod(source_color, (block_pos + vec2(3.0, 3.0)) * blur.source_pixel_size, 0.0);
+	vec4 color = sample_glow_source((block_pos + vec2(1.0, 1.0)) * blur.source_pixel_size);
+	color += sample_glow_source((block_pos + vec2(1.0, 3.0)) * blur.source_pixel_size);
+	color += sample_glow_source((block_pos + vec2(3.0, 1.0)) * blur.source_pixel_size);
+	color += sample_glow_source((block_pos + vec2(3.0, 3.0)) * blur.source_pixel_size);
 	frag_color = color * 0.25;
 
 	// Apply strength a second time since it usually gets added at each level.
@@ -210,7 +228,7 @@ void main() {
 
 #ifdef MODE_GLOW_DOWNSAMPLE
 	// Regular downsample, apply a simple blur.
-	frag_color = BloomDownKernel4(source_color, floor(gl_FragCoord.xy));
+	frag_color = BloomDownKernel4(floor(gl_FragCoord.xy));
 	frag_color *= blur.glow_strength;
 #endif // MODE_GLOW_DOWNSAMPLE
 

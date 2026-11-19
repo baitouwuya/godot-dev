@@ -1877,7 +1877,7 @@ public:
 	void _begin_frame(bool p_presented = false);
 	void _end_frame();
 	void _execute_frame(bool p_present);
-	void _stall_for_frame(uint32_t p_frame);
+	bool _stall_for_frame(uint32_t p_frame);
 	void _stall_for_previous_frames();
 	void _flush_and_stall_for_all_frames(bool p_begin_frame = true);
 
@@ -1919,6 +1919,9 @@ public:
 	uint64_t limit_get(Limit p_limit) const;
 
 	void swap_buffers(bool p_present);
+	Error poll_next_frame();
+	bool can_sync();
+	uint64_t get_driver_trait(RDD::ApiTrait p_trait) const { return driver->api_trait_get(p_trait); }
 
 	uint32_t get_frame_delay() const;
 

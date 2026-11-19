@@ -81,8 +81,8 @@ const Features = {
 		} = supportedFeatures;
 
 		const missing = [];
-		if (!Features.isWebGLAvailable(2)) {
-			missing.push('WebGL2 - Check web browser configuration and hardware support');
+		if (!navigator['gpu'] && !Features.isWebGLAvailable(2)) {
+			missing.push('WebGPU or WebGL2 - Check web browser configuration and hardware support');
 		}
 		if (!Features.isFetchAvailable()) {
 			missing.push('Fetch - Check web browser version');

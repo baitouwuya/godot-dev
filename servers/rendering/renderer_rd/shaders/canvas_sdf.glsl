@@ -2,11 +2,13 @@
 
 #version 450
 
+#extension GL_EXT_samplerless_texture_functions : enable
+
 #VERSION_DEFINES
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout(r8, set = 0, binding = 1) uniform restrict readonly image2D src_pixels;
+layout(set = 0, binding = 1) uniform texture2D src_pixels;
 layout(r16_snorm, set = 0, binding = 2) uniform restrict writeonly image2D dst_sdf;
 
 layout(rg16i, set = 0, binding = 3) uniform restrict readonly iimage2D src_process;
@@ -31,7 +33,7 @@ void main() {
 
 #ifdef MODE_LOAD
 
-	bool solid = imageLoad(src_pixels, pos).r > 0.5;
+	bool solid = texelFetch(src_pixels, pos, 0).r > 0.5;
 	imageStore(dst_process, pos, solid ? ivec4(ivec2(-32767), 0, 0) : ivec4(ivec2(32767), 0, 0));
 #endif
 
@@ -51,7 +53,7 @@ void main() {
 			if (any(greaterThanEqual(src_pos, params.base_size))) {
 				continue;
 			}
-			bool solid = imageLoad(src_pixels, src_pos).r > 0.5;
+			bool solid = texelFetch(src_pixels, src_pos, 0).r > 0.5;
 			if (solid) {
 				float dist = length(vec2(src_pos - center));
 				if (dist < d) {

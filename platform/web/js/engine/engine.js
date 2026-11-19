@@ -29,6 +29,7 @@ const Engine = (function () {
 	function Engine(initConfig) { // eslint-disable-line no-shadow
 		this.config = new InternalConfig(initConfig);
 		this.rtenv = null;
+		this.renderingBackend = null;
 	}
 
 	/**
@@ -146,11 +147,31 @@ const Engine = (function () {
 			start: function (override) {
 				this.config.update(override);
 				const me = this;
-				return me.init().then(function () {
+				return me.init().then(async function () {
 					if (!me.rtenv) {
 						return Promise.reject(new Error('The engine must be initialized before it can be started'));
 					}
 
+					const rendering = await me.config.negotiateRendering(me.rtenv['godotRenderingDrivers']);
+					me.renderingBackend = rendering.state;
+					window['godotRenderingBackend'] = rendering.state;
+					if (rendering.device) {
+						me.rtenv['preinitializedWebGPUDevice'] = rendering.device;
+						rendering.state['uncapturedErrors'] = [];
+						rendering.device['lost'].then(function (info) {
+							rendering.state['deviceLost'] = info['message'] || info['reason'] || 'lost';
+						});
+						if (typeof rendering.device['addEventListener'] === 'function') {
+							rendering.device['addEventListener']('uncapturederror', function (event) {
+								const err = event && event['error'];
+								const msg = (err && err['message']) ? String(err['message']) : String(err);
+								if (rendering.state['uncapturedErrors'].length < 32) {
+									rendering.state['uncapturedErrors'].push(msg);
+								}
+								console.error('[Godot WebGPU]', msg);
+							});
+						}
+					}
 					let config = {};
 					try {
 						config = me.config.getGodotConfig(function () {
@@ -172,12 +193,16 @@ const Engine = (function () {
 							me.rtenv['copyToFS'](file.path, file.buffer);
 						}
 						preloader.preloadedFiles.length = 0; // Clear memory
-						me.rtenv['callMain'](me.config.args);
+						me.rtenv['callMain'](rendering.args);
 						initPromise = null;
 						me.installServiceWorker();
 						resolve();
 					});
 				});
+			},
+
+			getRenderingBackend: function () {
+				return this.renderingBackend;
 			},
 
 			/**
@@ -257,6 +282,7 @@ const Engine = (function () {
 		Engine.prototype['preloadFile'] = Engine.prototype.preloadFile;
 		Engine.prototype['start'] = Engine.prototype.start;
 		Engine.prototype['startGame'] = Engine.prototype.startGame;
+		Engine.prototype['getRenderingBackend'] = Engine.prototype.getRenderingBackend;
 		Engine.prototype['copyToFS'] = Engine.prototype.copyToFS;
 		Engine.prototype['requestQuit'] = Engine.prototype.requestQuit;
 		Engine.prototype['installServiceWorker'] = Engine.prototype.installServiceWorker;

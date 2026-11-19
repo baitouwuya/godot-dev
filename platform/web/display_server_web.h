@@ -39,6 +39,11 @@
 #include <emscripten.h>
 #include <emscripten/html5.h>
 
+#ifdef WEBGPU_ENABLED
+class RenderingContextDriverWebGPU;
+class RenderingDevice;
+#endif
+
 class InputEvent;
 class InputEventWithModifiers;
 class NativeMenu;
@@ -81,6 +86,10 @@ private:
 	Array voices;
 
 	char canvas_id[256] = { 0 };
+#ifdef WEBGPU_ENABLED
+	RenderingContextDriverWebGPU *rendering_context = nullptr;
+	RenderingDevice *rendering_device = nullptr;
+#endif
 	bool cursor_inside_canvas = true;
 	DisplayServerEnums::CursorShape cursor_shape = DisplayServerEnums::CURSOR_ARROW;
 	Point2i last_click_pos = Point2(-100, -100); // TODO check this again.

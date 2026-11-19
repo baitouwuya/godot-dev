@@ -725,38 +725,31 @@ bool WorkerThreadPool::is_group_task_completed(GroupID p_group) const {
 }
 
 void WorkerThreadPool::wait_for_group_task_completion(GroupID p_group) {
-#ifdef THREADS_ENABLED
-	task_mutex.lock();
-	Group **groupp = groups.getptr(p_group);
-	task_mutex.unlock();
-	if (!groupp) {
-		ERR_FAIL_MSG("Invalid Group ID.");
-	}
-
+	Group *group;
 	{
-		Group *group = *groupp;
-
-		if (this == singleton) {
-			_unlock_unlockable_mutexes();
-		}
-		group->done_semaphore.wait();
-		if (this == singleton) {
-			_lock_unlockable_mutexes();
-		}
-
-		uint32_t max_users = group->tasks_used + 1; // Add 1 because the thread waiting for it is also user. Read before to avoid another thread freeing task after increment.
-		uint32_t finished_users = group->finished.increment(); // fetch happens before inc, so increment later.
-
-		if (finished_users == max_users) {
-			// All tasks using this group are gone (finished before the group), so clear the group too.
-			MutexLock task_lock(task_mutex);
-			group_allocator.free(group);
-		}
+		MutexLock task_lock(task_mutex);
+		Group **groupp = groups.getptr(p_group);
+		ERR_FAIL_NULL_MSG(groupp, "Invalid Group ID.");
+		group = *groupp;
+		groups.erase(p_group);
 	}
 
-	MutexLock task_lock(task_mutex); // This mutex is needed when Physics 2D and/or 3D is selected to run on a separate thread.
-	groups.erase(p_group);
+#ifdef THREADS_ENABLED
+	if (this == singleton) {
+		_unlock_unlockable_mutexes();
+	}
+	group->done_semaphore.wait();
+	if (this == singleton) {
+		_lock_unlockable_mutexes();
+	}
 #endif
+	// In no-thread builds _post_tasks has already executed the entire group inline.
+	// The waiter and tasks use the same last-user release rule in both builds.
+	const uint32_t max_users = group->tasks_used + 1;
+	if (group->finished.increment() == max_users) {
+		MutexLock task_lock(task_mutex);
+		group_allocator.free(group);
+	}
 }
 
 int WorkerThreadPool::get_thread_index() const {

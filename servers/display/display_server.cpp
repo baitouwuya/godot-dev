@@ -47,6 +47,10 @@ STATIC_ASSERT_INCOMPLETE_TYPE(class, RenderingServer);
 
 #if defined(RD_ENABLED)
 #include "servers/rendering/rendering_device.h"
+
+#ifdef WEBGPU_ENABLED
+#include "drivers/webgpu/rendering_context_driver_webgpu.h"
+#endif
 #endif
 
 #if defined(VULKAN_ENABLED)
@@ -2090,6 +2094,9 @@ void DisplayServer::_input_set_custom_mouse_cursor_func(const Ref<Resource> &p_i
 }
 
 bool DisplayServer::is_rendering_device_supported() {
+#ifdef WEBGPU_ENABLED
+	return RenderingDevice::get_singleton() || RenderingContextDriverWebGPU::is_device_available();
+#endif
 #if defined(RD_ENABLED)
 	RenderingDevice *device = RenderingDevice::get_singleton();
 	if (device) {
@@ -2175,6 +2182,10 @@ bool DisplayServer::can_create_rendering_device() {
 	if (get_singleton() && get_singleton()->get_name() == "headless") {
 		return false;
 	}
+
+#ifdef WEBGPU_ENABLED
+	return RenderingDevice::get_singleton() || RenderingContextDriverWebGPU::is_device_available();
+#endif
 
 #if defined(RD_ENABLED)
 	RenderingDevice *device = RenderingDevice::get_singleton();

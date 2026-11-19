@@ -876,7 +876,7 @@ void RenderForwardMobile::_render_scene(RenderDataRD *p_render_data, const Color
 	RID framebuffer;
 	bool reverse_cull = p_render_data->scene_data->cam_transform.basis.determinant() < 0;
 	bool merge_transparent_pass = true; // If true: we can do our transparent pass in the same pass as our opaque pass.
-	bool using_subpass_post_process = true; // If true: we can do our post processing in a subpass
+	bool using_subpass_post_process = RD::get_singleton()->get_driver_trait(RDD::API_TRAIT_SUPPORTS_INPUT_ATTACHMENTS);
 	RendererRD::MaterialStorage::Samplers samplers;
 	bool hdr_render_target = false;
 

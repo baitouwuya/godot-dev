@@ -1880,7 +1880,7 @@ RendererCanvasRenderRD::RendererCanvasRenderRD() {
 
 			RD::AttachmentFormat af_color;
 			af_color.format = RD::DATA_FORMAT_R8_UNORM;
-			af_color.usage_flags = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT;
+			af_color.usage_flags = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT;
 
 			attachments.push_back(af_color);
 

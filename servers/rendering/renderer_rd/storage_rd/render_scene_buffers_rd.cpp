@@ -32,6 +32,7 @@
 #include "render_scene_buffers_rd.compat.inc"
 
 #include "core/object/class_db.h"
+#include "core/os/os.h"
 #include "servers/rendering/renderer_rd/storage_rd/texture_storage.h"
 #include "servers/rendering/rendering_device_binds.h"
 #include "servers/rendering/rendering_server.h" // IWYU pragma: keep // Needed to bind RSE enums.
@@ -795,7 +796,10 @@ RID RenderSceneBuffersRD::get_velocity_depth_buffer() {
 uint32_t RenderSceneBuffersRD::get_color_usage_bits(bool p_resolve, bool p_msaa, bool p_storage) {
 	DEV_ASSERT((!p_resolve && !p_msaa) || (p_resolve != p_msaa));
 
-	uint32_t usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_INPUT_ATTACHMENT_BIT;
+	uint32_t usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT;
+	if (RD::get_singleton()->get_driver_trait(RDD::API_TRAIT_SUPPORTS_INPUT_ATTACHMENTS)) {
+		usage_bits |= RD::TEXTURE_USAGE_INPUT_ATTACHMENT_BIT;
+	}
 	if (p_msaa) {
 		usage_bits |= RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
 	} else if (p_resolve) {
@@ -843,6 +847,9 @@ uint32_t RenderSceneBuffersRD::get_depth_usage_bits(bool p_resolve, bool p_msaa,
 }
 
 RD::DataFormat RenderSceneBuffersRD::get_velocity_format() {
+	if (OS::get_singleton()->get_current_rendering_driver_name() == "webgpu") {
+		return RD::DATA_FORMAT_R16G16B16A16_SFLOAT;
+	}
 	return RD::DATA_FORMAT_R16G16_SFLOAT;
 }
 

@@ -150,6 +150,10 @@ void EditorExportPlatformWeb::_fix_html(Vector<uint8_t> &p_html, const Ref<Edito
 	config["gdextensionLibs"] = libs;
 	config["executable"] = p_name;
 	config["args"] = args;
+	// The base lookup resolves the preset's feature overrides (including .web).
+	const String rendering_method = get_project_setting(p_preset, "rendering/renderer/rendering_method");
+	config["renderingMethod"] = rendering_method;
+	config["renderingDriver"] = rendering_method == "gl_compatibility" ? "opengl3" : "webgpu";
 	config["fileSizes"] = p_file_sizes;
 	config["ensureCrossOriginIsolationHeaders"] = (bool)p_preset->get("progressive_web_app/ensure_cross_origin_isolation_headers");
 

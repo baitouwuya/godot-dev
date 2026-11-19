@@ -136,6 +136,10 @@ void RendererCompositorRD::end_frame(bool p_present) {
 	RD::get_singleton()->swap_buffers(p_present);
 }
 
+bool RendererCompositorRD::can_create_resources_async() const {
+	return !RD::get_singleton()->get_driver_trait(RDD::API_TRAIT_OWNER_THREAD_GPU_OBJECTS);
+}
+
 void RendererCompositorRD::initialize() {
 	{
 		// Initialize blit

@@ -42,6 +42,12 @@
 #include "servers/display/native_menu.h"
 #include "servers/rendering/dummy/rasterizer_dummy.h"
 
+#ifdef WEBGPU_ENABLED
+#include "drivers/webgpu/rendering_context_driver_webgpu.h"
+#include "servers/rendering/renderer_rd/renderer_compositor_rd.h"
+#include "servers/rendering/rendering_device.h"
+#endif
+
 #ifdef PROXY_TO_PTHREAD_ENABLED
 #include "core/object/callable_mp.h"
 #endif
@@ -66,11 +72,18 @@ DisplayServerWeb *DisplayServerWeb::get_singleton() {
 // Window (canvas)
 bool DisplayServerWeb::check_size_force_redraw() {
 	bool size_changed = godot_js_display_size_update() != 0;
-	if (size_changed && rect_changed_callback.is_valid()) {
+	if (size_changed) {
 		Size2i window_size = window_get_size();
 		Variant size = Rect2i(Point2i(), window_size); // TODO use window_get_position if implemented.
-		rect_changed_callback.call(size);
+		if (rect_changed_callback.is_valid()) {
+			rect_changed_callback.call(size);
+		}
 		emscripten_set_canvas_element_size(canvas_id, window_size.x, window_size.y);
+#ifdef WEBGPU_ENABLED
+		if (rendering_context) {
+			rendering_context->window_set_size(DisplayServerEnums::MAIN_WINDOW_ID, window_size.x, window_size.y);
+		}
+#endif
 	}
 	return size_changed;
 }
@@ -1003,6 +1016,9 @@ void DisplayServerWeb::process_joypads() {
 
 Vector<String> DisplayServerWeb::get_rendering_drivers_func() {
 	Vector<String> drivers;
+#ifdef WEBGPU_ENABLED
+	drivers.push_back("webgpu");
+#endif
 #ifdef GLES3_ENABLED
 	drivers.push_back("opengl3");
 #endif
@@ -1111,11 +1127,16 @@ void DisplayServerWeb::_dispatch_input_event(const Ref<InputEvent> &p_event) {
 }
 
 DisplayServer *DisplayServerWeb::create_func(const String &p_rendering_driver, DisplayServerEnums::WindowMode p_window_mode, DisplayServerEnums::VSyncMode p_vsync_mode, uint32_t p_flags, const Point2i *p_position, const Size2i &p_resolution, int p_screen, DisplayServerEnums::Context p_context, int64_t p_parent_window, Error &r_error) {
-	return memnew(DisplayServerWeb(p_rendering_driver, p_window_mode, p_vsync_mode, p_flags, p_position, p_resolution, p_screen, p_context, p_parent_window, r_error));
+	DisplayServerWeb *server = memnew(DisplayServerWeb(p_rendering_driver, p_window_mode, p_vsync_mode, p_flags, p_position, p_resolution, p_screen, p_context, p_parent_window, r_error));
+	if (r_error != OK) {
+		memdelete(server);
+		return nullptr;
+	}
+	return server;
 }
 
 DisplayServerWeb::DisplayServerWeb(const String &p_rendering_driver, DisplayServerEnums::WindowMode p_window_mode, DisplayServerEnums::VSyncMode p_vsync_mode, uint32_t p_flags, const Point2i *p_position, const Size2i &p_resolution, int p_screen, DisplayServerEnums::Context p_context, int64_t p_parent_window, Error &r_error) {
-	r_error = OK; // Always succeeds for now.
+	r_error = OK;
 
 	native_menu = memnew(NativeMenu); // Dummy native menu.
 
@@ -1131,6 +1152,27 @@ DisplayServerWeb::DisplayServerWeb(const String &p_rendering_driver, DisplayServ
 	// Expose method for requesting quit.
 	godot_js_os_request_quit_cb(request_quit_callback);
 
+#ifdef WEBGPU_ENABLED
+	if (p_rendering_driver == "webgpu") {
+		const auto window = DisplayServerEnums::MAIN_WINDOW_ID;
+		rendering_context = memnew(RenderingContextDriverWebGPU);
+		r_error = rendering_context->initialize();
+		ERR_FAIL_COND_MSG(r_error != OK, "WebGPU device negotiation did not provide a usable device.");
+		const godot::webgpu::WebGPUSurfacePlatformData surface{ canvas_id, OS::get_singleton()->is_layered_allowed() };
+		r_error = rendering_context->window_create(window, &surface);
+		ERR_FAIL_COND(r_error != OK);
+		const Size2i size = window_get_size();
+		rendering_context->window_set_size(window, size.x, size.y);
+		rendering_context->window_set_vsync_mode(window, p_vsync_mode);
+		rendering_device = memnew(RenderingDevice);
+		r_error = rendering_device->initialize(rendering_context, window);
+		ERR_FAIL_COND(r_error != OK);
+		r_error = rendering_device->screen_create(window);
+		ERR_FAIL_COND(r_error != OK);
+		RendererCompositorRD::make_current();
+	} else
+#endif
+	{
 #ifdef GLES3_ENABLED
 	bool webgl2_inited = false;
 	if (godot_js_display_has_webgl(2)) {
@@ -1160,6 +1202,7 @@ DisplayServerWeb::DisplayServerWeb(const String &p_rendering_driver, DisplayServ
 #else
 	RasterizerDummy::make_current();
 #endif
+	}
 
 	// JS Input interface (js/libs/library_godot_input.js)
 	godot_js_input_mouse_button_cb(&DisplayServerWeb::mouse_button_callback);
@@ -1186,6 +1229,17 @@ DisplayServerWeb::DisplayServerWeb(const String &p_rendering_driver, DisplayServ
 }
 
 DisplayServerWeb::~DisplayServerWeb() {
+#ifdef WEBGPU_ENABLED
+	if (rendering_device) {
+		memdelete(rendering_device);
+	}
+	if (rendering_context) {
+		if (rendering_context->surface_get_from_window(DisplayServerEnums::MAIN_WINDOW_ID)) {
+			rendering_context->window_destroy(DisplayServerEnums::MAIN_WINDOW_ID);
+		}
+		memdelete(rendering_context);
+	}
+#endif
 	if (native_menu) {
 		memdelete(native_menu);
 		native_menu = nullptr;
