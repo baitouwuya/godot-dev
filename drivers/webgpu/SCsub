@@ -1,0 +1,48 @@
+#!/usr/bin/env python
+from misc.utility.scons_hints import *
+
+import json
+import subprocess
+import sys
+
+Import("env")
+
+compiler_sources = json.loads(File("compiler_sources.json").get_text_contents())
+spirv = "#thirdparty/spirv-tools/"
+headers = "#thirdparty/spirv-headers/include/"
+tint = "#thirdparty/tint/"
+
+env_spirv = env.Clone()
+env_spirv.disable_warnings()
+env_spirv.Prepend(CPPPATH=[spirv, spirv + "include", spirv + "generated", headers, headers + "spirv/unified1"])
+
+env_tint = env_spirv.Clone()
+env_tint.Prepend(CPPPATH=[tint])
+env_tint.Append(CPPDEFINES=compiler_sources["tint_defines"])
+env_tint["CXXFLAGS"] = [flag for flag in env_tint["CXXFLAGS"] if not str(flag).startswith("-std=")] + ["-std=c++20"]
+
+# Explicit Object nodes isolate the two language modes and opt out of SCU:
+# both vendored libraries and our compiler passes use per-TU private helpers.
+env.drivers_sources.extend(env_spirv.Object([spirv + name for name in compiler_sources["spirv_tools"]]))
+env.drivers_sources.extend(env_tint.Object([tint + name for name in compiler_sources["tint"] + compiler_sources["tint_platform"]["web"]]))
+env.drivers_sources.extend(env_tint.Object("tint_wrapper.cpp"))
+env.drivers_sources.extend(env_spirv.Object(compiler_sources["godot_spirv"]))
+
+env_driver = env.Clone()
+env_driver.Prepend(CPPPATH=[headers])
+driver_sources = [node for node in Glob("*.cpp") if node.name != "tint_wrapper.cpp"]
+if env["webgpu_precompile_shaders"]:
+    def precompile(target, source, env):
+        return subprocess.call([sys.executable, "-B", File("#drivers/webgpu/wgsl_precompile.py").abspath,
+                                "--embed", target[0].abspath], cwd=Dir("#").abspath)
+
+    # Always invoke the host builder (which tracks its object/header dependencies)
+    # so generated tables never survive a change to an included compiler or GLSL file.
+    header = env.Command("webgpu_shader_cache.gen.h", "wgsl_precompile.py", Action(precompile, "Precompiling WebGPU shader plans"))
+    env.AlwaysBuild(header)
+    env_driver.Append(CPPDEFINES=["WEBGPU_PRECOMPILED_SHADERS"])
+    for source in driver_sources:
+        if source.name == "rendering_shader_container_webgpu.cpp":
+            env.Depends(source, header)
+
+env.drivers_sources.extend(env_driver.Object(driver_sources))
