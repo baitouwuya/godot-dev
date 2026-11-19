@@ -8410,7 +8410,8 @@ Error RenderingDevice::initialize(RenderingContextDriver *p_context, DisplayServ
 
 	uint32_t frame_count = 1;
 	if (main_surface != 0) {
-		frame_count = MAX(2U, uint32_t(GLOBAL_GET("rendering/rendering_device/vsync/frame_queue_size")));
+		const uint32_t min_frame_count = driver->api_trait_get(RDD::API_TRAIT_ASYNC_GPU_COMPLETION) ? 3U : 2U;
+		frame_count = MAX(min_frame_count, uint32_t(GLOBAL_GET("rendering/rendering_device/vsync/frame_queue_size")));
 	}
 
 	frame = 0;

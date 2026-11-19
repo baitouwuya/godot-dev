@@ -64,6 +64,9 @@ const GodotConfig = {
 		godot_pool_size: 4,
 		on_execute: null,
 		on_exit: null,
+		on_startup_progress: null,
+		on_first_frame_ready: null,
+		on_startup_exit: null,
 
 		init_config: function (p_opts) {
 			GodotConfig.canvas_resize_policy = p_opts['canvasResizePolicy'];
@@ -74,6 +77,9 @@ const GodotConfig = {
 			GodotConfig.godot_pool_size = p_opts['godotPoolSize'];
 			GodotConfig.on_execute = p_opts['onExecute'];
 			GodotConfig.on_exit = p_opts['onExit'];
+			GodotConfig.on_startup_progress = p_opts['onStartupProgress'];
+			GodotConfig.on_first_frame_ready = p_opts['onFirstFrameReady'];
+			GodotConfig.on_startup_exit = p_opts['onStartupExit'];
 			if (p_opts['focusCanvas']) {
 				GodotConfig.canvas.focus();
 			}
@@ -90,6 +96,9 @@ const GodotConfig = {
 			GodotConfig.persistent_drops = false;
 			GodotConfig.on_execute = null;
 			GodotConfig.on_exit = null;
+			GodotConfig.on_startup_progress = null;
+			GodotConfig.on_first_frame_ready = null;
+			GodotConfig.on_startup_exit = null;
 		},
 	},
 
@@ -206,29 +215,289 @@ const GodotFS = {
 		},
 
 		// Copies a buffer to the internal file system. Creating directories recursively.
-		copy_to_fs: function (path, buffer) {
-			const idx = path.lastIndexOf('/');
-			let dir = '/';
-			if (idx > 0) {
-				dir = path.slice(0, idx);
+		copy_to_fs: function (path, buffer, canOwn) {
+			if (!path.startsWith('/')) {
+				path = `${FS.cwd()}/${path}`;
 			}
+			const idx = path.lastIndexOf('/');
+			const dir = path.slice(0, idx) || '/';
 			try {
 				FS.stat(dir);
 			} catch (e) {
 				if (e.errno !== GodotFS.ENOENT) {
-					// Let mkdirTree throw in case, we cannot trust the above check.
-					GodotRuntime.error(e);
+					throw e;
 				}
 				FS.mkdirTree(dir);
 			}
-			FS.writeFile(path, new Uint8Array(buffer));
+			const bytes = ArrayBuffer.isView(buffer)
+				? new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+				: new Uint8Array(buffer);
+			if (!canOwn) {
+				FS.writeFile(path, bytes);
+				return;
+			}
+			try {
+				FS.unlink(path);
+			} catch (e) {
+				if (e.errno !== GodotFS.ENOENT) {
+					throw e;
+				}
+			}
+			FS.createDataFile(dir, path.slice(idx + 1), bytes, true, true, true);
 		},
 	},
 };
 mergeInto(LibraryManager.library, GodotFS);
 
+const GodotPackStream = {
+	$GodotPackStream__deps: ['$GodotRuntime'],
+	$GodotPackStream__postset: 'Module["initPackStream"] = GodotPackStream.init;',
+	$GodotPackStream: {
+		pack: null,
+		path: null,
+		controller: null,
+		started: false,
+		entries: [],
+		queued: [],
+		ready: [],
+		slots: 0,
+		slot_bytes: 0,
+		publish_frame: 0,
+		stats: null,
+
+		init: function (pack) {
+			GodotPackStream.pack = pack;
+			GodotPackStream.controller = new AbortController();
+			GodotPackStream.stats = { 'total': 0, 'completed': 0, 'failed': 0, 'bytesLoaded': 0, 'bytesTotal': 0, 'active': false };
+			const encoder = new TextEncoder();
+			GodotPackStream.path = encoder.encode(pack['path']);
+			GodotPackStream.entries = pack['entries'].map(function (metadata) {
+				return { data: metadata, path: encoder.encode(metadata['path']), state: 'idle', middle: null };
+			});
+			GodotPackStream.publish();
+		},
+
+		publish: function () {
+			if (!GodotPackStream.publish_frame) {
+				GodotPackStream.publish_frame = requestAnimationFrame(function () {
+					GodotPackStream.publish_frame = 0;
+					const state = { ...GodotPackStream.stats };
+					state['active'] = GodotPackStream.started && state['total'] > state['completed'] + state['failed'];
+					window['godotStreamState'] = state;
+					if (typeof window['onGodotStreamProgress'] === 'function') {
+						window['onGodotStreamProgress'](state);
+					}
+				});
+			}
+		},
+
+		start: function () {
+			if (GodotPackStream.pack) {
+				GodotPackStream.started = true;
+				GodotPackStream.pump();
+			}
+		},
+
+		stop: function () {
+			if (GodotPackStream.controller) {
+				GodotPackStream.controller.abort();
+				GodotPackStream.controller = null;
+				GodotPackStream.started = false;
+				GodotPackStream.pack = null;
+				GodotPackStream.path = null;
+				GodotPackStream.entries.length = 0;
+				GodotPackStream.queued.length = 0;
+				GodotPackStream.ready.length = 0;
+				GodotPackStream.slots = 0;
+				GodotPackStream.slot_bytes = 0;
+				GodotPackStream.publish();
+			}
+		},
+
+		// First slab whose starting byte is greater than the requested offset.
+		upper_bound: function (slabs, offset) {
+			let lo = 0;
+			let hi = slabs.length;
+			while (lo < hi) {
+				const mid = Math.floor((lo + hi) / 2);
+				if (slabs[mid]['start'] <= offset) {
+					lo = mid + 1;
+				} else {
+					hi = mid;
+				}
+			}
+			return lo;
+		},
+
+		read: function (offset, dst, length) {
+			const slabs = GodotPackStream.pack['slabs'];
+			const first = GodotPackStream.upper_bound(slabs, offset) - 1;
+			const end = offset + length;
+			let pos = offset;
+			let last = first;
+			// Validate the entire interval before writing into WASM.
+			while (pos < end) {
+				const slab = slabs[last++];
+				if (!slab || slab['start'] > pos || slab['start'] + slab['bytes'].length <= pos) {
+					return 0;
+				}
+				pos = slab['start'] + slab['bytes'].length;
+			}
+			pos = offset;
+			for (let i = first; i < last; ++i) {
+				const slab = slabs[i];
+				const bytes = slab['bytes'].subarray(pos - slab['start'], end - slab['start']);
+				HEAPU8.set(bytes, dst + pos - offset);
+				pos += bytes.length;
+			}
+			return 1;
+		},
+
+		request_full: function (index) {
+			const entry = GodotPackStream.entries[index];
+			if (entry.state === 'idle') {
+				entry.state = 'queued';
+				GodotPackStream.queued.push(index);
+				GodotPackStream.stats['total'] += 1;
+				GodotPackStream.stats['bytesTotal'] += entry.data['tailStart'] - entry.data['headEnd'];
+				GodotPackStream.publish();
+				GodotPackStream.pump();
+			}
+		},
+
+		pump: function () {
+			if (!GodotPackStream.started) {
+				return;
+			}
+			const pack = GodotPackStream.pack;
+			const controller = GodotPackStream.controller;
+			while (GodotPackStream.slots < 4 && GodotPackStream.queued.length) {
+				const index = GodotPackStream.queued[0];
+				const entry = GodotPackStream.entries[index];
+				const length = entry.data['tailStart'] - entry.data['headEnd'];
+				if (GodotPackStream.slots && GodotPackStream.slot_bytes + length > 64 * 1024 * 1024) {
+					return;
+				}
+				GodotPackStream.queued.shift();
+				GodotPackStream.slots += 1; // A ready result holds its slot until C++ consumes it.
+				GodotPackStream.slot_bytes += length;
+				entry.state = 'fetching';
+				const start = entry.data['offset'] + entry.data['headEnd'];
+				pack['fetchRange'](start, start + length, function (count) {
+					if (!controller.signal.aborted) {
+						GodotPackStream.stats['bytesLoaded'] += count;
+						GodotPackStream.publish();
+					}
+				}, controller.signal).then(function (bytes) {
+					if (!controller.signal.aborted) {
+						const slabs = pack['slabs'];
+						entry.middle = { 'start': start, 'bytes': bytes };
+						slabs.splice(GodotPackStream.upper_bound(slabs, start), 0, entry.middle);
+						entry.state = 'ready';
+						GodotPackStream.ready.push(index);
+						GodotPackStream.publish();
+					}
+				}, function (error) {
+					if (!controller.signal.aborted) {
+						console.error(`Failed to stream texture '${entry.data['path']}': ${error.message}`);
+						entry.state = 'ready';
+						GodotPackStream.stats['failed'] += 1;
+						GodotPackStream.ready.push(index);
+						GodotPackStream.publish();
+					}
+				});
+			}
+		},
+
+		evict: function (index) {
+			const entry = GodotPackStream.entries[index];
+			if (entry.middle) {
+				const slabs = GodotPackStream.pack['slabs'];
+				slabs.splice(GodotPackStream.upper_bound(slabs, entry.middle['start']) - 1, 1);
+				entry.middle = null;
+				GodotPackStream.stats['completed'] += 1;
+				GodotPackStream.publish();
+			}
+			entry.state = 'idle';
+			GodotPackStream.slots -= 1;
+			GodotPackStream.slot_bytes -= entry.data['tailStart'] - entry.data['headEnd'];
+			GodotPackStream.pump();
+		},
+	},
+
+	godot_js_pck_get_size__proxy: 'sync',
+	godot_js_pck_get_size__sig: 'd',
+	godot_js_pck_get_size: function () {
+		return GodotPackStream.pack ? GodotPackStream.pack['size'] : 0;
+	},
+
+	godot_js_pck_path_size__proxy: 'sync',
+	godot_js_pck_path_size__sig: 'i',
+	godot_js_pck_path_size: function () {
+		return GodotPackStream.path.length + 1;
+	},
+
+	godot_js_pck_get_path__proxy: 'sync',
+	godot_js_pck_get_path__sig: 'vii',
+	godot_js_pck_get_path: function (pathPtr, pathSize) {
+		GodotRuntime.stringToHeap(GodotPackStream.pack['path'], pathPtr, pathSize);
+	},
+
+	godot_js_pck_read__proxy: 'sync',
+	godot_js_pck_read__sig: 'idii',
+	godot_js_pck_read: function (offset, dst, length) {
+		return GodotPackStream.read(offset, dst >>> 0, length >>> 0);
+	},
+
+	godot_js_pck_entry_path_size__proxy: 'sync',
+	godot_js_pck_entry_path_size__sig: 'ii',
+	godot_js_pck_entry_path_size: function (index) {
+		return index < GodotPackStream.entries.length ? GodotPackStream.entries[index].path.length + 1 : 0;
+	},
+
+	godot_js_pck_get_entry__proxy: 'sync',
+	godot_js_pck_get_entry__sig: 'viiiii',
+	godot_js_pck_get_entry: function (index, pathPtr, pathSize, rangesPtr, md5Ptr) {
+		const entry = GodotPackStream.entries[index];
+		HEAPU8.set(entry.path, pathPtr >>> 0);
+		HEAPU8[(pathPtr >>> 0) + pathSize - 1] = 0;
+		const ranges = rangesPtr >>> 3;
+		HEAPF64[ranges] = entry.data['offset'];
+		HEAPF64[ranges + 1] = entry.data['size'];
+		HEAPF64[ranges + 2] = entry.data['headEnd'];
+		HEAPF64[ranges + 3] = entry.data['tailStart'];
+		HEAPU8.set(entry.data['md5'], md5Ptr >>> 0);
+	},
+
+	godot_js_pck_request_full__proxy: 'sync',
+	godot_js_pck_request_full__sig: 'vi',
+	godot_js_pck_request_full: function (index) {
+		GodotPackStream.request_full(index);
+	},
+
+	godot_js_pck_poll_ready__proxy: 'sync',
+	godot_js_pck_poll_ready__sig: 'ii',
+	godot_js_pck_poll_ready: function (successPtr) {
+		if (!GodotPackStream.ready.length) {
+			return -1;
+		}
+		const index = GodotPackStream.ready.shift();
+		HEAP32[successPtr >>> 2] = GodotPackStream.entries[index].middle ? 1 : 0;
+		return index;
+	},
+
+	godot_js_pck_evict_middle__proxy: 'sync',
+	godot_js_pck_evict_middle__sig: 'vi',
+	godot_js_pck_evict_middle: function (index) {
+		GodotPackStream.evict(index);
+	},
+};
+
+autoAddDeps(GodotPackStream, '$GodotPackStream');
+mergeInto(LibraryManager.library, GodotPackStream);
+
 const GodotOS = {
-	$GodotOS__deps: ['$GodotRuntime', '$GodotConfig', '$GodotFS'],
+	$GodotOS__deps: ['$GodotRuntime', '$GodotConfig', '$GodotFS', '$GodotPackStream'],
 	$GodotOS__postset: [
 		'Module["request_quit"] = function() { GodotOS.request_quit() };',
 		'Module["onExit"] = GodotOS.cleanup;',
@@ -245,6 +514,7 @@ const GodotOS = {
 
 		cleanup: function (exit_code) {
 			const cb = GodotConfig.on_exit;
+			GodotPackStream.stop();
 			GodotFS.deinit();
 			GodotConfig.clear();
 			if (cb) {
@@ -268,6 +538,33 @@ const GodotOS = {
 				}, 0);
 			});
 		},
+	},
+
+	godot_js_os_report_progress__proxy: 'sync',
+	godot_js_os_report_progress__sig: 'vfi',
+	godot_js_os_report_progress: function (ratio, label) {
+		if (GodotConfig.on_startup_progress) {
+			GodotConfig.on_startup_progress(ratio, GodotRuntime.parseString(label));
+		}
+	},
+
+	godot_js_os_first_frame_ready__proxy: 'sync',
+	godot_js_os_first_frame_ready__sig: 'vi',
+	godot_js_os_first_frame_ready: function (keepRunning) {
+		if (GodotConfig.on_first_frame_ready) {
+			GodotConfig.on_first_frame_ready();
+		}
+		if (keepRunning) {
+			GodotPackStream.start();
+		}
+	},
+
+	godot_js_os_startup_exit__proxy: 'sync',
+	godot_js_os_startup_exit__sig: 'vii',
+	godot_js_os_startup_exit: function (exitCode, message) {
+		if (GodotConfig.on_startup_exit) {
+			GodotConfig.on_startup_exit(exitCode, GodotRuntime.parseString(message));
+		}
 	},
 
 	godot_js_os_finish_async__proxy: 'sync',

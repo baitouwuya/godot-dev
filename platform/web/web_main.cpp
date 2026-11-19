@@ -31,6 +31,7 @@
 #include "display_server_web.h"
 #include "godot_js.h"
 #include "os_web.h"
+#include "web_pack_stream.h"
 
 #include "core/config/engine.h"
 #include "core/io/resource_loader.h"
@@ -57,12 +58,15 @@ static uint64_t target_ticks = 0;
 
 static bool main_started = false;
 static bool shutdown_complete = false;
+enum class StartupPhase { SETUP2, START, FIRST_FRAME };
+static StartupPhase startup_phase = StartupPhase::SETUP2;
 
 void exit_callback() {
 	if (!shutdown_complete) {
 		return; // Still waiting.
 	}
 	if (main_started) {
+		WebPackStream::clear_upgrades();
 		Main::cleanup();
 		main_started = false;
 	}
@@ -75,6 +79,18 @@ void exit_callback() {
 
 void cleanup_after_sync() {
 	shutdown_complete = true;
+}
+
+static void begin_shutdown() {
+	emscripten_cancel_main_loop();
+	emscripten_set_main_loop(exit_callback, -1, false);
+	godot_js_os_finish_async(cleanup_after_sync);
+}
+
+static void abort_startup(int p_exit_code, const char *p_message) {
+	os->set_exit_code(p_exit_code);
+	godot_js_os_startup_exit(p_exit_code, p_message);
+	begin_shutdown();
 }
 
 void main_loop_callback() {
@@ -104,9 +120,7 @@ void main_loop_callback() {
 #endif
 
 	if (os->main_loop_iterate()) {
-		emscripten_cancel_main_loop(); // Cancel current loop and set the cleanup one.
-		emscripten_set_main_loop(exit_callback, -1, false);
-		godot_js_os_finish_async(cleanup_after_sync);
+		begin_shutdown();
 	}
 }
 
@@ -129,6 +143,66 @@ void print_web_header() {
 	print_line(vformat("Build configuration: %s.", String(", ").join(build_configuration)));
 }
 
+static void startup_loop_callback() {
+	switch (startup_phase) {
+		case StartupPhase::SETUP2: {
+			if (Main::setup2() != OK) {
+				abort_startup(EXIT_FAILURE, "Godot failed to initialize servers.");
+				return;
+			}
+			main_started = true;
+			print_web_header();
+			ResourceLoader::set_abort_on_missing_resources(false);
+			startup_phase = StartupPhase::START;
+			godot_js_os_report_progress(0.76f, "Loading scene and resident textures...");
+			return;
+		}
+		case StartupPhase::START: {
+			const int result = Main::start();
+			if (result != EXIT_SUCCESS || !os->get_main_loop()) {
+				abort_startup(result, result == EXIT_SUCCESS ? "Godot exited before starting a scene." : "Godot failed to start the scene.");
+				return;
+			}
+			os->get_main_loop()->initialize();
+#ifdef TOOLS_ENABLED
+			if (Engine::get_singleton()->is_project_manager_hint() && FileAccess::exists("/tmp/preload.zip")) {
+				PackedStringArray ps;
+				ps.push_back("/tmp/preload.zip");
+				SceneTree::get_singleton()->get_root()->emit_signal(SNAME("files_dropped"), ps);
+			}
+#endif
+			startup_phase = StartupPhase::FIRST_FRAME;
+			godot_js_os_report_progress(0.93f, "Preparing first frame pipelines...");
+			return;
+		}
+		case StartupPhase::FIRST_FRAME: {
+			DisplayServerWeb::get_singleton()->check_size_force_redraw();
+			Main::force_redraw();
+			const uint64_t before = Engine::get_singleton()->get_process_frames();
+			const bool quit = os->main_loop_iterate();
+			if (quit && os->get_exit_code() != EXIT_SUCCESS) {
+				abort_startup(os->get_exit_code(), "Godot failed during its first frame.");
+				return;
+			}
+			if (Engine::get_singleton()->get_process_frames() == before) {
+				if (quit) {
+					abort_startup(EXIT_FAILURE, "Godot failed before the first frame iteration.");
+				}
+				return; // ERR_BUSY does not run Main::iteration().
+			}
+			godot_js_os_report_progress(1.0f, "Ready");
+			godot_js_os_first_frame_ready(!quit);
+			if (quit) {
+				begin_shutdown();
+			} else {
+				emscripten_cancel_main_loop();
+				emscripten_set_main_loop(main_loop_callback, -1, false);
+			}
+			return;
+		}
+	}
+}
+
 /// When calling main, it is assumed FS is setup and synced.
 extern EMSCRIPTEN_KEEPALIVE int godot_web_main(int argc, char *argv[]) {
 	godot_init_profiler();
@@ -142,47 +216,15 @@ extern EMSCRIPTEN_KEEPALIVE int godot_web_main(int argc, char *argv[]) {
 	// We must override main when testing is enabled
 	TEST_MAIN_OVERRIDE
 
-	Error err = Main::setup(argv[0], argc - 1, &argv[1]);
-
-	// Proper shutdown in case of setup failure.
+	const Error err = Main::setup(argv[0], argc - 1, &argv[1], false);
 	if (err != OK) {
-		// Will only exit after sync.
-		emscripten_set_main_loop(exit_callback, -1, false);
-		godot_js_os_finish_async(cleanup_after_sync);
-		if (err == ERR_HELP) { // Returned by --help and --version, so success.
-			return EXIT_SUCCESS;
-		}
-		return EXIT_FAILURE;
+		const int result = err == ERR_HELP ? EXIT_SUCCESS : EXIT_FAILURE;
+		abort_startup(result, err == ERR_HELP ? "Godot exited after printing help or version information." : "Godot failed to set up the project.");
+		return result;
 	}
 
-	print_web_header();
-
-	main_started = true;
-
-	// Ease up compatibility.
-	ResourceLoader::set_abort_on_missing_resources(false);
-
-	int ret = Main::start();
-	os->set_exit_code(ret);
-	os->get_main_loop()->initialize();
-#ifdef TOOLS_ENABLED
-	if (Engine::get_singleton()->is_project_manager_hint() && FileAccess::exists("/tmp/preload.zip")) {
-		PackedStringArray ps;
-		ps.push_back("/tmp/preload.zip");
-		SceneTree::get_singleton()->get_root()->emit_signal(SNAME("files_dropped"), ps);
-	}
-#endif
-	// Run the first iteration before arming the rAF loop so startup errors reject
-	// startGame() cleanly without leaving a half-open frame re-entering on rAF.
-	if (DisplayServerWeb::get_singleton()->check_size_force_redraw()) {
-		Main::force_redraw();
-	}
-	if (os->main_loop_iterate()) {
-		emscripten_set_main_loop(exit_callback, -1, false);
-		godot_js_os_finish_async(cleanup_after_sync);
-	} else {
-		emscripten_set_main_loop(main_loop_callback, -1, false);
-	}
-
-	return os->get_exit_code();
+	WebPackStream::mount_partial_files();
+	godot_js_os_report_progress(0.56f, "Initializing renderer and shaders...");
+	emscripten_set_main_loop(startup_loop_callback, -1, false);
+	return EXIT_SUCCESS;
 }

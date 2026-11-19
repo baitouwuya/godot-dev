@@ -5,8 +5,24 @@ using namespace godot::webgpu;
 namespace godot::webgpu {
 namespace {
 
-bool compatible_usage(ScopeUse p_a, ScopeUse p_b) {
-	return p_a == p_b || (p_a <= ScopeUse::STORAGE_READ && p_b <= ScopeUse::STORAGE_READ);
+bool overlaps(const BufferScopeUse &p_a, const BufferScopeUse &p_b) {
+	return p_a.resource == p_b.resource;
+}
+
+bool overlaps(const TextureScopeUse &p_a, const TextureScopeUse &p_b) {
+	return p_a.overlaps(p_b);
+}
+
+template <typename T>
+bool has_conflict(const std::vector<T> &p_left, const std::vector<T> &p_right) {
+	for (const auto &a : p_left) {
+		for (const auto &b : p_right) {
+			if (a.use != b.use && overlaps(a, b)) {
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 WGPULoadOp attachment_load(bool p_started, RDD::AttachmentLoadOp p_load_op) {
@@ -15,42 +31,127 @@ WGPULoadOp attachment_load(bool p_started, RDD::AttachmentLoadOp p_load_op) {
 
 } // namespace
 
-bool UsageScope::add(ScopeKey p_key, ScopeUse p_use) {
-	const auto [it, inserted] = usages.emplace(p_key, p_use);
-	return inserted || compatible_usage(it->second, p_use);
+bool TextureScopeUse::overlaps(const TextureScopeUse &p_other) const {
+	return backing == p_other.backing && (aspect_mask & p_other.aspect_mask) != 0 &&
+			mip_begin < p_other.mip_end && p_other.mip_begin < mip_end &&
+			layer_begin < p_other.layer_end && p_other.layer_begin < layer_end;
 }
 
-bool UsageScope::add_texture(const TextureResource &p_texture, ScopeUse p_use, uint32_t p_mips, uint32_t p_layers, WGPUTextureAspect p_aspect) {
-	const auto &tex = *p_texture.backing;
-	if (tex.atomic_buffer) {
-		return add({ &tex }, p_use);
-	}
-	if (p_aspect == WGPUTextureAspect_All && (p_texture.format.depth || p_texture.format.stencil)) {
-		return (!p_texture.format.depth || add_texture(p_texture, p_use, p_mips, p_layers, WGPUTextureAspect_DepthOnly)) &&
-				(!p_texture.format.stencil || add_texture(p_texture, p_use, p_mips, p_layers, WGPUTextureAspect_StencilOnly));
-	}
-	for (uint32_t m = 0; m < p_mips; ++m) {
-		for (uint32_t l = 0; l < p_layers; ++l) {
-			if (!add({ &tex, p_aspect, p_texture.base_mip + m, p_texture.base_layer + l }, p_use)) {
-				return false;
+TextureScopeUse texture_scope_use(const TextureResource &p_texture, ScopeUse p_use, uint32_t p_mips, uint32_t p_layers, WGPUTextureAspect p_aspect) {
+	constexpr uint8_t COLOR = 1, DEPTH = 2, STENCIL = 4;
+	uint8_t mask = 0;
+	switch (p_aspect) {
+		case WGPUTextureAspect_DepthOnly: mask = DEPTH; break;
+		case WGPUTextureAspect_StencilOnly: mask = STENCIL; break;
+		default:
+			mask = (p_texture.format.depth ? DEPTH : 0) | (p_texture.format.stencil ? STENCIL : 0);
+			if (!mask) {
+				mask = COLOR;
 			}
-		}
+			break;
 	}
-	return true;
+	// WebGPU gives non-2D textures one subresource per mip and aspect, not one per depth slice.
+	const bool array = p_texture.backing->dimension == WGPUTextureDimension_2D;
+	return { p_texture.backing.get(), p_texture.base_mip, p_texture.base_mip + p_mips,
+		array ? p_texture.base_layer : 0, array ? p_texture.base_layer + p_layers : 1, mask, p_use };
 }
 
-bool UsageScope::compatible(const UsageScope &p_other) const {
-	for (const auto &[key, use] : p_other.usages) {
-		const auto it = usages.find(key);
-		if (it != usages.end() && !compatible_usage(it->second, use)) {
+void UsageScope::add_buffer(const void *p_resource, ScopeUse p_use) {
+	(p_use <= ScopeUse::STORAGE_READ ? read_buffers : write_buffers).push_back({ p_resource, p_use });
+}
+
+void UsageScope::add_texture(TextureScopeUse p_range) {
+	(p_range.use <= ScopeUse::STORAGE_READ ? read_textures : write_textures).push_back(p_range);
+}
+
+bool UsageScope::can_read_buffer(const void *p_resource) const {
+	for (const auto &binding : write_buffers) {
+		if (binding.resource == p_resource) {
 			return false;
 		}
 	}
 	return true;
 }
 
+bool UsageScope::compatible(const UsageScope &p_other) const {
+	// Buffer writes all use STORAGE_WRITE; only textures can mix two write usages.
+	return !has_conflict(write_buffers, p_other.read_buffers) && !has_conflict(p_other.write_buffers, read_buffers) &&
+			!has_conflict(write_textures, p_other.read_textures) && !has_conflict(p_other.write_textures, read_textures) &&
+			!has_conflict(write_textures, p_other.write_textures);
+}
+
 void UsageScope::merge(const UsageScope &p_other) {
-	usages.insert(p_other.usages.begin(), p_other.usages.end());
+	read_buffers.insert(read_buffers.end(), p_other.read_buffers.begin(), p_other.read_buffers.end());
+	write_buffers.insert(write_buffers.end(), p_other.write_buffers.begin(), p_other.write_buffers.end());
+	read_textures.insert(read_textures.end(), p_other.read_textures.begin(), p_other.read_textures.end());
+	write_textures.insert(write_textures.end(), p_other.write_textures.begin(), p_other.write_textures.end());
+}
+
+void UsageScope::clear() {
+	read_buffers.clear();
+	write_buffers.clear();
+	read_textures.clear();
+	write_textures.clear();
+}
+
+void CommandRecording::keep_render_read(const std::shared_ptr<BufferResource> &p_buffer) {
+	const auto [it, first] = referenced.try_emplace(p_buffer.get(), 0);
+	if (it->second != render_scope_epoch) {
+		scope.add_buffer(p_buffer.get(), ScopeUse::READ);
+		it->second = render_scope_epoch;
+	}
+	if (first) {
+		uses.push_back(p_buffer);
+	}
+}
+
+void CommandRecording::keep_bind_group(const std::shared_ptr<BindGroupResource> &p_group, bool p_render) {
+	const auto [it, first] = referenced.try_emplace(p_group.get(), 0);
+	if (p_render && it->second != render_scope_epoch) {
+		scope.merge(p_group->usage);
+		it->second = render_scope_epoch;
+	}
+	if (first) {
+		uses.push_back(p_group);
+		// Preserve submission-use tracking for children without copying their refs per draw.
+		for (const auto &use : p_group->resources) {
+			keep(use);
+		}
+	}
+}
+
+void CommandRecording::reset_encoder_state() {
+	active_render_pipeline = nullptr;
+	active_compute_pipeline = nullptr;
+	for (auto &group : active_bind_groups) {
+		group.handle = nullptr;
+	}
+	active_viewport.reset();
+	active_scissor.reset();
+	active_blend.reset();
+	active_stencil_reference.reset();
+	for (auto &binding : active_vertex_buffers) {
+		binding = {};
+	}
+	active_index_buffer = {};
+}
+
+void CommandRecording::trim_render_slots(uint32_t p_groups, uint32_t p_vertices, uint32_t p_limit) {
+	DEV_ASSERT(p_groups + p_vertices <= p_limit);
+	// The combined draw limit includes still-bound slots that the new pipeline does not use.
+	while (MAX(bound_render_groups, p_groups) + MAX(bound_render_vertices, p_vertices) > p_limit) {
+		if (bound_render_groups > p_groups) {
+			const uint32_t slot = --bound_render_groups;
+			wgpuRenderPassEncoderSetBindGroup(render.get(), slot, nullptr, 0, nullptr);
+			active_bind_groups[slot].handle = nullptr;
+		} else {
+			const uint32_t slot = --bound_render_vertices;
+			wgpuRenderPassEncoderSetVertexBuffer(render.get(), slot, nullptr, 0, 0);
+			active_vertex_buffers[slot] = {};
+		}
+	}
+	bound_render_groups = MAX(bound_render_groups, p_groups);
+	bound_render_vertices = MAX(bound_render_vertices, p_vertices);
 }
 
 void CommandRecording::open_render(VectorView<RDD::AttachmentClear> p_clears) {
@@ -84,11 +185,11 @@ void CommandRecording::open_render(VectorView<RDD::AttachmentClear> p_clears) {
 				}
 			}
 			attachment_started[p_index] = true;
-			attachments.add_texture(*tex, ScopeUse::ATTACHMENT, 1, 1, WGPUTextureAspect_All);
+			attachments.add_texture(texture_scope_use(*tex, ScopeUse::ATTACHMENT, 1, 1, WGPUTextureAspect_All));
 		}
 		colors.push_back(desc);
 	};
-	attachments = {};
+	attachments.clear();
 	for (uint32_t i = 0; i < pass.color_references.size(); ++i) {
 		color(pass.color_references[i].attachment, i);
 	}
@@ -100,6 +201,7 @@ void CommandRecording::open_render(VectorView<RDD::AttachmentClear> p_clears) {
 		desc.loadOp = WGPULoadOp_Clear;
 		desc.storeOp = WGPUStoreOp_Discard;
 		colors.assign(1, desc);
+		attachments.add_texture(texture_scope_use(*target, ScopeUse::ATTACHMENT, 1, 1, WGPUTextureAspect_All));
 	}
 	WGPURenderPassDepthStencilAttachment depth = WGPU_RENDER_PASS_DEPTH_STENCIL_ATTACHMENT_INIT;
 	const uint32_t d = pass.depth_stencil_reference.attachment;
@@ -135,7 +237,7 @@ void CommandRecording::open_render(VectorView<RDD::AttachmentClear> p_clears) {
 			}
 		}
 		attachment_started[d] = true;
-		attachments.add_texture(*tex, read_only ? ScopeUse::READ : ScopeUse::ATTACHMENT, 1, 1, WGPUTextureAspect_All);
+		attachments.add_texture(texture_scope_use(*tex, read_only ? ScopeUse::READ : ScopeUse::ATTACHMENT, 1, 1, WGPUTextureAspect_All));
 	}
 	WGPURenderPassDescriptor desc = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
 	desc.colorAttachmentCount = colors.size();
@@ -143,6 +245,9 @@ void CommandRecording::open_render(VectorView<RDD::AttachmentClear> p_clears) {
 	desc.depthStencilAttachment = depth.view ? &depth : nullptr;
 	render.reset(wgpuCommandEncoderBeginRenderPass(encoder.get(), &desc));
 	ERR_FAIL_COND(!render);
+	reset_encoder_state();
+	++render_scope_epoch;
+	DEV_ASSERT(render_scope_epoch != 0);
 	for (const auto &label : labels) {
 		wgpuRenderPassEncoderPushDebugGroup(render.get(), wg_string(label));
 	}
@@ -156,6 +261,9 @@ void CommandRecording::end_render() {
 		}
 		wgpuRenderPassEncoderEnd(render.get());
 		render.reset();
+		bound_render_groups = bound_render_vertices = 0;
+		reset_encoder_state();
+		scope.clear();
 	}
 }
 
@@ -164,6 +272,7 @@ void CommandRecording::open_compute() {
 		DEV_ASSERT(!layout);
 		compute.reset(wgpuCommandEncoderBeginComputePass(encoder.get(), nullptr));
 		ERR_FAIL_COND(!compute);
+		reset_encoder_state();
 		for (const auto &label : labels) {
 			wgpuComputePassEncoderPushDebugGroup(compute.get(), wg_string(label));
 		}
@@ -177,6 +286,7 @@ void CommandRecording::end_compute() {
 		}
 		wgpuComputePassEncoderEnd(compute.get());
 		compute.reset();
+		reset_encoder_state();
 	}
 }
 

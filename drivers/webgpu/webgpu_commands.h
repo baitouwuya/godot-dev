@@ -3,7 +3,6 @@
 #include "webgpu_shader_resources.h"
 
 #include <cstring>
-#include <unordered_set>
 
 namespace godot::webgpu {
 
@@ -11,29 +10,6 @@ struct PushPage : GpuUse {
 	std::shared_ptr<BufferResource> gpu;
 	std::vector<uint8_t> bytes;
 	uint32_t used = 0;
-};
-
-// WebGPU usage scope: compatible read usages may be combined, and one
-// writable usage may be repeated, but may not be combined with other usages.
-enum class ScopeUse : uint8_t { READ, STORAGE_READ, STORAGE_WRITE, ATTACHMENT };
-struct ScopeKey {
-	const void *resource;
-	WGPUTextureAspect aspect = WGPUTextureAspect_Undefined;
-	uint32_t mip = 0;
-	uint32_t layer = 0;
-	bool operator<(const ScopeKey &p_other) const {
-		if (resource != p_other.resource) {
-			return std::less<const void *>{}(resource, p_other.resource);
-		}
-		return std::tie(aspect, mip, layer) < std::tie(p_other.aspect, p_other.mip, p_other.layer);
-	}
-};
-struct UsageScope {
-	std::map<ScopeKey, ScopeUse> usages;
-	bool add(ScopeKey p_key, ScopeUse p_use);
-	bool add_texture(const TextureResource &p_texture, ScopeUse p_use, uint32_t p_mips, uint32_t p_layers, WGPUTextureAspect p_aspect);
-	bool compatible(const UsageScope &p_other) const;
-	void merge(const UsageScope &p_other);
 };
 
 struct Fence {
@@ -58,6 +34,28 @@ struct VertexBufferBinding {
 	uint32_t frame = 0;
 };
 
+struct ActiveBufferBinding {
+	WGPUBuffer buffer = nullptr;
+	uint64_t offset = 0;
+	uint64_t size = 0;
+	bool operator==(const ActiveBufferBinding &p_other) const {
+		return buffer == p_other.buffer && offset == p_other.offset && size == p_other.size;
+	}
+};
+
+struct ActiveIndexBinding {
+	ActiveBufferBinding buffer;
+	WGPUIndexFormat format = WGPUIndexFormat_Undefined;
+	bool operator==(const ActiveIndexBinding &p_other) const {
+		return buffer == p_other.buffer && format == p_other.format;
+	}
+};
+
+struct ActiveBindGroup {
+	WGPUBindGroup handle = nullptr;
+	std::vector<uint32_t> offsets;
+};
+
 struct CommandRecording {
 	CommandEncoderHandle encoder;
 	CommandBufferHandle finished;
@@ -71,9 +69,10 @@ struct CommandRecording {
 	uint32_t render_samples = 1;
 	Rect2i area, viewport, scissor;
 	UsageScope scope, attachments;
+	uint64_t render_scope_epoch = 0;
 	std::shared_ptr<PipelineResource> pipeline;
-	std::map<uint32_t, std::shared_ptr<LogicalUniformSet>> sets;
-	std::map<const BufferResource *, uint32_t> frames;
+	LogicalUniformSets sets;
+	std::map<uint32_t, uint32_t> frames; // Packed frame indices captured per logical set.
 	std::vector<VertexBufferBinding> vertex;
 	VertexBufferBinding index;
 	WGPUIndexFormat index_format = WGPUIndexFormat_Undefined;
@@ -86,18 +85,39 @@ struct CommandRecording {
 	std::map<TimestampPool *, std::shared_ptr<TimestampCapture>> timestamps;
 	std::vector<std::string> labels;
 	UseList uses;
-	std::unordered_set<const GpuUse *> referenced;
+	std::unordered_map<const GpuUse *, uint64_t> referenced; // Zero or the last render usage scope epoch.
+	BindGroupScratch bind_group_scratch;
+	std::vector<PhysicalBindGroup> draw_groups;
+	WGPURenderPipeline active_render_pipeline = nullptr;
+	WGPUComputePipeline active_compute_pipeline = nullptr;
+	// Actual slot extent, even when a utility draw invalidates the cached state below.
+	uint32_t bound_render_groups = 0, bound_render_vertices = 0;
+	std::vector<ActiveBindGroup> active_bind_groups;
+	std::optional<Rect2i> active_viewport, active_scissor;
+	std::optional<Color> active_blend;
+	std::optional<uint32_t> active_stencil_reference;
+	std::vector<ActiveBufferBinding> active_vertex_buffers;
+	ActiveIndexBinding active_index_buffer;
 
 	void open_render(VectorView<RDD::AttachmentClear> p_clears = {});
 	void end_render();
 	void open_compute();
 	void end_compute();
 	void outside_pass();
-	void keep(const std::shared_ptr<GpuUse> &p_use) {
-		if (referenced.insert(p_use.get()).second) {
+	void reset_encoder_state();
+	void trim_render_slots(uint32_t p_groups, uint32_t p_vertices, uint32_t p_limit);
+	template <typename T>
+	void keep(const std::shared_ptr<T> &p_use) {
+		if (referenced.try_emplace(p_use.get(), 0).second) {
 			uses.push_back(p_use);
 		}
 	}
+	bool scoped(const GpuUse *p_use) const {
+		const auto it = referenced.find(p_use);
+		return it != referenced.end() && it->second == render_scope_epoch;
+	}
+	void keep_render_read(const std::shared_ptr<BufferResource> &p_buffer);
+	void keep_bind_group(const std::shared_ptr<BindGroupResource> &p_group, bool p_render);
 	void download(const std::shared_ptr<BufferResource> &p_buffer);
 };
 

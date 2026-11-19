@@ -199,6 +199,10 @@ void RenderingDeviceDriverWebGPU::command_render_clear_attachments(CommandBuffer
 	const auto pass = cmd.render.get();
 	wgpuRenderPassEncoderSetPipeline(pass, pipeline.get());
 	if (group) {
+		if (cmd.active_bind_groups.empty()) {
+			cmd.active_bind_groups.resize(1);
+		}
+		cmd.trim_render_slots(1, 0, state->limits.maxBindGroupsPlusVertexBuffers);
 		wgpuRenderPassEncoderSetBindGroup(pass, 0, group.get(), 0, nullptr);
 	}
 	wgpuRenderPassEncoderSetViewport(pass, 0, 0, full.size.x, full.size.y, 0.f, 1.f);
@@ -210,5 +214,6 @@ void RenderingDeviceDriverWebGPU::command_render_clear_attachments(CommandBuffer
 			wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
 		}
 	}
-	// The next ordinary draw replays viewport, scissor, pipeline, and bindings.
+	// The physical pass and its usage scope survive the utility draw, but its state does not.
+	cmd.reset_encoder_state();
 }

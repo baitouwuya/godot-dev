@@ -37,6 +37,10 @@
 #include "core/object/class_db.h"
 #include "scene/resources/image_texture.h"
 
+#ifdef WEB_ENABLED
+#include "platform/web/web_pack_stream.h"
+#endif
+
 DDSFormat _dxgi_to_dds_format(uint32_t p_dxgi_format) {
 	switch (p_dxgi_format) {
 		case DXGI_R32G32B32A32_FLOAT: {
@@ -144,6 +148,10 @@ DDSFormat _dxgi_to_dds_format(uint32_t p_dxgi_format) {
 	}
 }
 
+static uint64_t _dds_mip_size(const DDSFormatInfo &p_info, uint32_t p_width, uint32_t p_height) {
+	return p_info.compressed ? ((uint64_t(p_width) + 3) / 4) * ((uint64_t(p_height) + 3) / 4) * p_info.block_size : uint64_t(p_width) * p_height * p_info.block_size;
+}
+
 static Ref<Image> _dds_load_layer(Ref<FileAccess> p_file, DDSFormat p_dds_format, uint32_t p_width, uint32_t p_height, uint32_t p_mipmaps, uint32_t p_pitch, uint32_t p_flags, Vector<uint8_t> &r_src_data) {
 	const DDSFormatInfo &info = dds_format_info[p_dds_format];
 
@@ -161,7 +169,7 @@ static Ref<Image> _dds_load_layer(Ref<FileAccess> p_file, DDSFormat p_dds_format
 			WARN_PRINT(vformat("%s: DDS height '%d' is not divisible by %d. This is not allowed as per the DDS specification, attempting to load anyway.", p_file->get_path(), p_height, info.divisor));
 		}
 
-		uint32_t size = MAX(1u, (w + 3) / 4) * MAX(1u, (h + 3) / 4) * info.block_size;
+		uint64_t size = _dds_mip_size(info, w, h);
 
 		if (p_flags & DDSD_LINEARSIZE) {
 			ERR_FAIL_COND_V_MSG(size != p_pitch, Ref<Resource>(), "DDS header flags specify that a linear size of the top-level image is present, but the specified size does not match the expected value.");
@@ -173,24 +181,24 @@ static Ref<Image> _dds_load_layer(Ref<FileAccess> p_file, DDSFormat p_dds_format
 			w = MAX(1u, w >> 1);
 			h = MAX(1u, h >> 1);
 
-			uint32_t bsize = MAX(1u, (w + 3) / 4) * MAX(1u, (h + 3) / 4) * info.block_size;
-			size += bsize;
+			size += _dds_mip_size(info, w, h);
 		}
 
-		r_src_data.resize(size);
+		ERR_FAIL_COND_V(r_src_data.resize(size) != OK, Ref<Image>());
 		uint8_t *wb = r_src_data.ptrw();
-		p_file->get_buffer(wb, size);
+		ERR_FAIL_COND_V(p_file->get_buffer(wb, size) != size, Ref<Image>());
 
 	} else {
 		// Generic uncompressed.
-		uint32_t size = p_width * p_height * info.block_size;
+		uint64_t source_size = _dds_mip_size(info, p_width, p_height);
 
 		for (uint32_t i = 1; i < p_mipmaps; i++) {
 			w = MAX(1u, w >> 1);
 			h = MAX(1u, h >> 1);
-			size += w * h * info.block_size;
+			source_size += _dds_mip_size(info, w, h);
 		}
 
+		uint64_t size = source_size;
 		// Calculate the space these formats will take up after decoding.
 		switch (p_dds_format) {
 			case DDS_BGR5A1:
@@ -207,9 +215,9 @@ static Ref<Image> _dds_load_layer(Ref<FileAccess> p_file, DDSFormat p_dds_format
 				break;
 		}
 
-		r_src_data.resize(size);
+		ERR_FAIL_COND_V(size > UINT32_MAX || r_src_data.resize(size) != OK, Ref<Image>());
 		uint8_t *wb = r_src_data.ptrw();
-		p_file->get_buffer(wb, size);
+		ERR_FAIL_COND_V(p_file->get_buffer(wb, source_size) != source_size, Ref<Image>());
 
 		switch (p_dds_format) {
 			case DDS_BGR5A1: {
@@ -488,7 +496,7 @@ static Ref<Resource> _dds_create_texture_from_images(const Vector<Ref<Image>> &p
 	return _dds_create_texture(p_images, p_dds_type, p_width, p_height, p_layer_count, p_mipmaps, r_error);
 }
 
-static Vector<Ref<Image>> _dds_load_images_from_buffer(Ref<FileAccess> p_f, DDSFormat &r_dds_format, uint32_t &r_width, uint32_t &r_height, uint32_t &r_mipmaps, uint32_t &r_pitch, uint32_t &r_flags, uint32_t &r_layer_count, uint32_t &r_dds_type, const String &p_path = "") {
+static Vector<Ref<Image>> _dds_load_images_from_buffer(Ref<FileAccess> p_f, DDSFormat &r_dds_format, uint32_t &r_width, uint32_t &r_height, uint32_t &r_mipmaps, uint32_t &r_pitch, uint32_t &r_flags, uint32_t &r_layer_count, uint32_t &r_dds_type, const String &p_path = "", uint64_t p_tail_start = 0) {
 	ERR_FAIL_COND_V_MSG(p_f.is_null(), Vector<Ref<Image>>(), vformat("Empty DDS texture file."));
 	ERR_FAIL_COND_V_MSG(!p_f->get_length(), Vector<Ref<Image>>(), vformat("Empty DDS texture file."));
 
@@ -509,7 +517,7 @@ static Vector<Ref<Image>> _dds_load_images_from_buffer(Ref<FileAccess> p_f, DDSF
 	// Validate.
 	// We don't check DDSD_CAPS or DDSD_PIXELFORMAT, as they're mandatory when writing,
 	// but non-mandatory when reading (as some writers don't set them).
-	if (magic != DDS_MAGIC || hsize != 124) {
+	if (magic != DDS_MAGIC || hsize != 124 || !r_width || !r_height || uint64_t(r_width) * r_height > Image::MAX_PIXELS) {
 		ERR_FAIL_V_MSG(Vector<Ref<Image>>(), vformat("Invalid or unsupported DDS texture file '%s'.", p_path));
 	}
 
@@ -700,6 +708,25 @@ static Vector<Ref<Image>> _dds_load_images_from_buffer(Ref<FileAccess> p_f, DDSF
 		r_mipmaps = 1;
 	}
 
+	if (p_tail_start) {
+		ERR_FAIL_COND_V(r_dds_type != DDST_2D || r_layer_count != 1, Vector<Ref<Image>>());
+		const DDSFormatInfo &info = dds_format_info[r_dds_format];
+		uint64_t pos = p_f->get_position();
+		uint32_t width = r_width;
+		uint32_t height = r_height;
+		uint32_t remaining_mips = r_mipmaps;
+		while (pos < p_tail_start && remaining_mips > 1) {
+			pos += _dds_mip_size(info, width, height);
+			width = MAX(1u, width >> 1);
+			height = MAX(1u, height >> 1);
+			--remaining_mips;
+		}
+		ERR_FAIL_COND_V(pos < p_tail_start, Vector<Ref<Image>>());
+		p_f->seek(pos);
+		// The header pitch describes the original base level, not this mip.
+		return _dds_load_images(p_f, r_dds_format, width, height, remaining_mips, 0, r_flags & ~(DDSD_LINEARSIZE | DDSD_PITCH), 1);
+	}
+
 	return _dds_load_images(p_f, r_dds_format, r_width, r_height, r_mipmaps, r_pitch, r_flags, r_layer_count);
 }
 
@@ -710,6 +737,28 @@ static Ref<Resource> _dds_load_from_buffer(Ref<FileAccess> p_f, Error *r_error, 
 
 	DDSFormat dds_format;
 	uint32_t width = 0, height = 0, mipmaps = 0, pitch = 0, flags = 0, layer_count = 0, dds_type = 0;
+
+#ifdef WEB_ENABLED
+	const auto partial = WebPackStream::query_partial(p_f);
+	if (partial) {
+		const Vector<Ref<Image>> images = _dds_load_images_from_buffer(p_f, dds_format, width, height, mipmaps, pitch, flags, layer_count, dds_type, p_path, partial.tail_start);
+		ERR_FAIL_COND_V(images.is_empty() || images[0]->is_empty(), Ref<Resource>());
+		Ref<ImageTexture> texture = ImageTexture::create_from_image(images[0]);
+		texture->set_size_override(Size2i(width, height));
+		WebPackStream::register_texture_upgrade(partial, p_path, **texture, [](const String &p_source, Resource &r_resource) {
+			const Ref<FileAccess> file = FileAccess::open(p_source, FileAccess::READ);
+			DDSFormat format;
+			uint32_t w, h, mips, pitch, flags, layers, type;
+			const Vector<Ref<Image>> full = _dds_load_images_from_buffer(file, format, w, h, mips, pitch, flags, layers, type, p_source);
+			ERR_FAIL_COND_MSG(full.is_empty() || full[0]->is_empty(), vformat("Failed to upgrade streamed DDS '%s'.", p_source));
+			static_cast<ImageTexture &>(r_resource).set_image(full[0]);
+		});
+		if (r_error) {
+			*r_error = OK;
+		}
+		return texture;
+	}
+#endif
 
 	Vector<Ref<Image>> images = _dds_load_images_from_buffer(p_f, dds_format, width, height, mipmaps, pitch, flags, layer_count, dds_type, p_path);
 	return _dds_create_texture_from_images(images, dds_format, width, height, mipmaps, pitch, flags, layer_count, dds_type, r_error);

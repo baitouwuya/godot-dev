@@ -30,6 +30,27 @@ const Engine = (function () {
 		this.config = new InternalConfig(initConfig);
 		this.rtenv = null;
 		this.renderingBackend = null;
+		this.packStream = null;
+		this.progress = 0;
+		this.progressLabel = '';
+		this.rejectStartup = null;
+	}
+
+	function reportProgress(engine, ratio, label) {
+		const current = Math.max(engine.progress, Math.min(10000, Math.round(ratio * 10000)));
+		if (current === engine.progress && label === engine.progressLabel) {
+			return;
+		}
+		engine.progress = current;
+		engine.progressLabel = label;
+		window['godotStartupStatus'] = { 'ratio': current / 10000, 'label': label };
+		if (typeof engine.config.onProgress === 'function') {
+			try {
+				engine.config.onProgress(current, 10000);
+			} catch (error) {
+				console.error('Godot startup progress callback failed:', error);
+			}
+		}
 	}
 
 	/**
@@ -45,7 +66,6 @@ const Engine = (function () {
 		if (loadPromise == null) {
 			loadPath = basePath;
 			loadPromise = preloader.loadPromise(`${loadPath}.wasm`, size, true);
-			requestAnimationFrame(preloader.animateProgress);
 		}
 		return loadPromise;
 	};
@@ -92,22 +112,32 @@ const Engine = (function () {
 					// This caused a regression with the Mono build (which uses an older emscripten version).
 					// Make sure to test that when refactoring.
 					return new Promise(function (resolve, reject) {
+						function onFailure(error) {
+							reject(error);
+							if (me.rejectStartup) {
+								me.rejectStartup(error);
+							}
+						}
 						promise.then(function (response) {
 							const cloned = new Response(response.clone().body, { 'headers': [['content-type', 'application/wasm']] });
-							Godot(me.config.getModuleConfig(loadPath, cloned)).then(function (module) {
-								const paths = me.config.persistentPaths;
-								module['initFS'](paths).then(function (err) {
-									me.rtenv = module;
-									if (me.config.unloadAfterInit) {
-										Engine.unload();
-									}
-									resolve();
-								});
+							return Godot(me.config.getModuleConfig(loadPath, cloned, onFailure));
+						}).then(function (module) {
+							return module['initFS'](me.config.persistentPaths).then(function () {
+								me.rtenv = module;
+								if (me.config.unloadAfterInit) {
+									Engine.unload();
+								}
+								resolve();
 							});
-						});
+						}).catch(onFailure);
 					});
 				}
-				preloader.setProgressFunc(this.config.onProgress);
+				preloader.setProgressFunc(function (loaded, total) {
+					// Do not display network progress after initialization stages begin.
+					if (me.progress < 5000) {
+						reportProgress(me, total > 0 ? Math.min(0.4999, 0.5 * loaded / total) : 0, 'Downloading engine and project...');
+					}
+				});
 				initPromise = doInit(loadPromise);
 				return initPromise;
 			},
@@ -152,6 +182,7 @@ const Engine = (function () {
 						return Promise.reject(new Error('The engine must be initialized before it can be started'));
 					}
 
+					reportProgress(me, 0.5, 'Preparing browser renderer...');
 					const rendering = await me.config.negotiateRendering(me.rtenv['godotRenderingDrivers']);
 					me.renderingBackend = rendering.state;
 					window['godotRenderingBackend'] = rendering.state;
@@ -172,31 +203,52 @@ const Engine = (function () {
 							});
 						}
 					}
-					let config = {};
-					try {
-						config = me.config.getGodotConfig(function () {
-							me.rtenv = null;
-						});
-					} catch (e) {
-						return Promise.reject(e);
-					}
-					// Godot configuration.
-					me.rtenv['initConfig'](config);
-
 					// Preload GDExtension libraries.
 					if (me.config.gdextensionLibs.length > 0 && !me.rtenv['loadDynamicLibrary']) {
 						return Promise.reject(new Error('GDExtension libraries are not supported by this engine version. '
 							+ 'Enable "Extensions Support" for your export preset and/or build your custom template with "dlink_enabled=yes".'));
 					}
 					return new Promise(function (resolve, reject) {
-						for (const file of preloader.preloadedFiles) {
-							me.rtenv['copyToFS'](file.path, file.buffer);
+						function rejectStartup(error) {
+							me.rejectStartup = null;
+							initPromise = null;
+							reject(error);
 						}
-						preloader.preloadedFiles.length = 0; // Clear memory
-						me.rtenv['callMain'](rendering.args);
-						initPromise = null;
-						me.installServiceWorker();
-						resolve();
+						function startupExit(code, message) {
+							if (me.rejectStartup) {
+								const error = new Error(message);
+								error['exitCode'] = code;
+								rejectStartup(error);
+							}
+						}
+						me.rejectStartup = rejectStartup;
+						try {
+							const config = me.config.getGodotConfig(function (code) {
+								me.rtenv = null;
+								startupExit(code, `Godot exited before its first frame (status ${code}).`);
+							}, function (ratio, label) {
+								reportProgress(me, ratio, label);
+							}, function () {
+								if (me.rejectStartup) {
+									me.rejectStartup = null;
+									initPromise = null;
+									resolve();
+									me.installServiceWorker().catch(function (error) { console.error(error); });
+								}
+							}, startupExit);
+							me.rtenv['initConfig'](config);
+							for (const file of preloader.preloadedFiles) {
+								me.rtenv['copyToFS'](file.path, file.buffer, file.owned);
+							}
+							preloader.preloadedFiles.length = 0;
+							if (me.packStream) {
+								me.rtenv['initPackStream'](me.packStream);
+								me.packStream = null;
+							}
+							me.rtenv['callMain'](rendering.args);
+						} catch (error) {
+							rejectStartup(error);
+						}
 					});
 				});
 			},
@@ -223,13 +275,24 @@ const Engine = (function () {
 				// Add main-pack argument.
 				const exe = this.config.executable;
 				const pack = this.config.mainPack || `${exe}.pck`;
-				this.config.args = ['--main-pack', pack].concat(this.config.args);
-				// Start and init with execName as loadPath if not inited.
 				const me = this;
-				return Promise.all([
-					this.init(exe),
-					this.preloadFile(pack, pack),
-				]).then(function () {
+				const initialized = this.init(exe);
+				const loaded = (async function () {
+					if (me.config.streamPack && !me.config.args.includes('--main-pack')) {
+						me.packStream = await preloader.loadPack(pack, async function () {
+							if (!me.config.progressiveTextureMips) {
+								return false;
+							}
+							await initialized;
+							return !me.rtenv['godotThreaded'];
+						});
+					}
+					if (!me.packStream) {
+						await me.preloadFile(pack, pack);
+					}
+				})();
+				return Promise.all([initialized, loaded]).then(function () {
+					me.config.args = ['--main-pack', pack].concat(me.config.args);
 					return me.start.apply(me);
 				});
 			},

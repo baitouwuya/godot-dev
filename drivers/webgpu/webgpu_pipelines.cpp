@@ -330,43 +330,60 @@ RDD::PipelineID RenderingDeviceDriverWebGPU::render_pipeline_create(ShaderID p_s
 	return resource_id<PipelineID>(std::move(pipeline));
 }
 
-std::shared_ptr<PipelineResource> RenderingDeviceDriverWebGPU::materialize_pipeline(PipelineResource &r_pipeline, const std::map<uint32_t, std::shared_ptr<LogicalUniformSet>> &p_sets) {
-	CompileOptions options = r_pipeline.source->options;
+std::shared_ptr<PipelineResource> RenderingDeviceDriverWebGPU::materialize_pipeline(PipelineResource &r_pipeline, const LogicalUniformSets &p_sets) {
+	auto &specialization = r_pipeline.specialization_key;
+	specialization.clear();
+	const auto &used_sets = r_pipeline.source->reflection.uniform_sets;
 	for (const auto &[index, set] : p_sets) {
-		for (const auto &[key, binding] : set->bindings) {
-			if (!binding.texture) {
-				continue;
-			}
-			const auto &texture = *binding.texture;
-			if (key.role == Role::TEXTURE && texture.format.depth) {
-				options.raw_depth.push_back(key);
-			} else if (key.role == Role::TEXTURE && texture.format.sample_type == SampleType::UNFILTERABLE_FLOAT) {
-				options.unfilterable_float.push_back(key);
-			} else if (key.role == Role::STORAGE_TEXTURE) {
-				options.storage_formats[key] = static_cast<uint32_t>(texture.format.storage_format);
-			} else if (key.role == Role::STORAGE_BUFFER) {
-				// The set stores the physical role; the compiler looks up the SPIR-V image.
-				options.atomic_images[{ key.set, key.binding, key.element, Role::STORAGE_TEXTURE }] = static_cast<uint32_t>(texture.format.storage_format);
+		// RenderingDevice can leave higher logical slots stale across shorter layouts.
+		// A folded physical group number is not a logical set number.
+		if (!set->specialization.empty() && index < static_cast<uint32_t>(used_sets.size()) && !used_sets[index].is_empty()) {
+			specialization.insert(specialization.end(), set->specialization.begin(), set->specialization.end());
+		}
+	}
+	if (specialization.empty() && r_pipeline.default_variant) {
+		return r_pipeline.default_variant;
+	}
+	if (!specialization.empty()) {
+		const auto found = r_pipeline.specialized_variants.find(specialization);
+		if (found != r_pipeline.specialized_variants.end()) {
+			return found->second;
+		}
+	}
+	std::optional<CompileOptions> overrides;
+	if (!specialization.empty()) {
+		overrides.emplace(r_pipeline.source->options);
+		for (const auto &[key, kind, format] : specialization) {
+			switch (kind) {
+				case BindingSpecialization::RAW_DEPTH: overrides->raw_depth.push_back(key); break;
+				case BindingSpecialization::UNFILTERABLE_FLOAT: overrides->unfilterable_float.push_back(key); break;
+				case BindingSpecialization::STORAGE_FORMAT: overrides->storage_formats[key] = format; break;
+				case BindingSpecialization::ATOMIC_IMAGE: overrides->atomic_images[key] = format; break;
 			}
 		}
 	}
-	const auto variant = realize_shader(r_pipeline.source, VectorView<PipelineSpecializationConstant>(r_pipeline.constants.data(), r_pipeline.constants.size()), options);
+	const auto variant = realize_shader(r_pipeline.source, VectorView<PipelineSpecializationConstant>(r_pipeline.constants.data(), r_pipeline.constants.size()),
+			overrides ? *overrides : r_pipeline.source->options);
 	if (!variant) {
 		return {};
 	}
 	const auto &key = variant->prepared->key;
-	const auto it = r_pipeline.variants.find(key);
-	if (it != r_pipeline.variants.end()) {
-		return it->second;
+	auto it = r_pipeline.variants.find(key);
+	if (it == r_pipeline.variants.end()) {
+		auto gpu = std::make_shared<PipelineResource>();
+		gpu->shader = variant;
+		gpu->vertex_bindings = r_pipeline.vertex_bindings;
+		gpu->is_strip = r_pipeline.is_strip;
+		gpu->label = r_pipeline.label;
+		ERR_FAIL_COND_V(!r_pipeline.create(*gpu, *variant), {});
+		it = r_pipeline.variants.emplace(key, std::move(gpu)).first;
 	}
-	auto gpu = std::make_shared<PipelineResource>();
-	gpu->shader = variant;
-	gpu->vertex_bindings = r_pipeline.vertex_bindings;
-	gpu->is_strip = r_pipeline.is_strip;
-	gpu->label = r_pipeline.label;
-	ERR_FAIL_COND_V(!r_pipeline.create(*gpu, *variant), {});
-	r_pipeline.variants.emplace(key, gpu);
-	return gpu;
+	if (specialization.empty()) {
+		r_pipeline.default_variant = it->second;
+	} else {
+		r_pipeline.specialized_variants.emplace(specialization, it->second);
+	}
+	return it->second;
 }
 
 void RenderingDeviceDriverWebGPU::pipeline_free(PipelineID p_pipeline) {

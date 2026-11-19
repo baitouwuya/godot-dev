@@ -56,6 +56,14 @@ const InternalConfig = function (initConfig) { // eslint-disable-line no-unused-
 		 * @type {?string}
 		 */
 		mainPack: null,
+		/** @type {boolean} Use Range requests for a compatible main pack. */
+		streamPack: true,
+		/**
+		 * Opt in to partial texture residency on single-threaded exports.
+		 * Leave this off if the application reads original texture bytes synchronously or applies texture delta packs at runtime.
+		 * @type {boolean}
+		 */
+		progressiveTextureMips: false,
 		/**
 		 * Specify a language code to select the proper localization for the game.
 		 *
@@ -175,21 +183,16 @@ const InternalConfig = function (initConfig) { // eslint-disable-line no-unused-
 		 */
 		onExit: null,
 		/**
-		 * A callback function for displaying download progress.
+		 * A callback function for displaying startup progress.
 		 *
 		 * The function is called once per frame while downloading files, so the usage of ``requestAnimationFrame()``
 		 * is not necessary.
 		 *
-		 * If the callback function receives a total amount of bytes as 0, this means that it is impossible to calculate.
-		 * Possible reasons include:
-		 *
-		 * -  Files are delivered with server-side chunked compression
-		 * -  Files are delivered with server-side compression on Chromium
-		 * -  Not all file downloads have started yet (usually on servers without multi-threading)
+		 * The first half tracks downloads with known totals. The second half reports engine initialization through the first iteration.
 		 *
 		 * @callback EngineConfig.onProgress
-		 * @param {number} current The current amount of downloaded bytes so far.
-		 * @param {number} total The total amount of bytes to be downloaded.
+		 * @param {number} current Startup progress in normalized units.
+		 * @param {number} total Total number of progress units.
 		 */
 		/**
 		 * @ignore
@@ -266,6 +269,8 @@ const InternalConfig = function (initConfig) { // eslint-disable-line no-unused-
 		this.renderingDriver = parse('renderingDriver', this.renderingDriver);
 		this.executable = parse('executable', this.executable);
 		this.mainPack = parse('mainPack', this.mainPack);
+		this.streamPack = parse('streamPack', this.streamPack);
+		this.progressiveTextureMips = parse('progressiveTextureMips', this.progressiveTextureMips);
 		this.locale = parse('locale', this.locale);
 		this.canvasResizePolicy = parse('canvasResizePolicy', this.canvasResizePolicy);
 		this.persistentPaths = parse('persistentPaths', this.persistentPaths);
@@ -395,8 +400,9 @@ const InternalConfig = function (initConfig) { // eslint-disable-line no-unused-
 	 * @ignore
 	 * @param {string} loadPath
 	 * @param {Response} response
+	 * @param {function(!Error)} onFailure
 	 */
-	Config.prototype.getModuleConfig = function (loadPath, response) {
+	Config.prototype.getModuleConfig = function (loadPath, response, onFailure) {
 		let r = response;
 		const gdext = this.gdextensionLibs;
 		return {
@@ -404,19 +410,19 @@ const InternalConfig = function (initConfig) { // eslint-disable-line no-unused-
 			'printErr': this.onPrintError,
 			'thisProgram': this.executable,
 			'noExitRuntime': false,
+			'onAbort': function (reason) { onFailure(new Error(`Godot runtime aborted: ${reason}`)); },
 			'dynamicLibraries': [`${loadPath}.side.wasm`].concat(this.gdextensionLibs),
 			'emscriptenPoolSize': this.emscriptenPoolSize,
 			'instantiateWasm': function (imports, onSuccess) {
 				function done(result) {
 					onSuccess(result['instance'], result['module']);
 				}
-				if (typeof (WebAssembly.instantiateStreaming) !== 'undefined') {
-					WebAssembly.instantiateStreaming(Promise.resolve(r), imports).then(done);
-				} else {
-					r.arrayBuffer().then(function (buffer) {
-						WebAssembly.instantiate(buffer, imports).then(done);
+				const wasm = typeof WebAssembly.instantiateStreaming === 'function'
+					? WebAssembly.instantiateStreaming(r, imports)
+					: r.arrayBuffer().then(function (buffer) {
+						return WebAssembly.instantiate(buffer, imports);
 					});
-				}
+				wasm.then(done).catch(onFailure);
 				r = null;
 				return {};
 			},
@@ -443,9 +449,12 @@ const InternalConfig = function (initConfig) { // eslint-disable-line no-unused-
 
 	/**
 	 * @ignore
-	 * @param {function()} cleanup
+	 * @param {function(number)} cleanup
+	 * @param {function(number, string)} onProgress
+	 * @param {function()} onReady
+	 * @param {function(number, string)} onStartupExit
 	 */
-	Config.prototype.getGodotConfig = function (cleanup) {
+	Config.prototype.getGodotConfig = function (cleanup, onProgress, onReady, onStartupExit) {
 		// Try to find a canvas
 		if (!(this.canvas instanceof HTMLCanvasElement)) {
 			const nodes = document.getElementsByTagName('canvas');
@@ -481,8 +490,11 @@ const InternalConfig = function (initConfig) { // eslint-disable-line no-unused-
 			'godotPoolSize': this.godotPoolSize,
 			'focusCanvas': this.focusCanvas,
 			'onExecute': this.onExecute,
+			'onStartupProgress': onProgress,
+			'onFirstFrameReady': onReady,
+			'onStartupExit': onStartupExit,
 			'onExit': function (p_code) {
-				cleanup(); // We always need to call the cleanup callback to free memory.
+				cleanup(p_code); // We always need to call the cleanup callback to free memory.
 				if (typeof (onExit) === 'function') {
 					onExit(p_code);
 				}

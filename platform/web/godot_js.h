@@ -47,6 +47,9 @@ extern void godot_js_config_canvas_id_get(char *p_ptr, int p_ptr_max);
 
 // OS
 extern void godot_js_os_finish_async(void (*p_callback)());
+extern void godot_js_os_report_progress(float p_ratio, const char *p_label);
+extern void godot_js_os_first_frame_ready(int p_continue);
+extern void godot_js_os_startup_exit(int p_exit_code, const char *p_message);
 extern void godot_js_os_request_quit_cb(void (*p_callback)());
 extern int godot_js_os_fs_is_persistent();
 extern void godot_js_os_fs_sync(void (*p_callback)());
@@ -57,6 +60,17 @@ extern int godot_js_os_thread_pool_size_get();
 extern int godot_js_os_has_feature(const char *p_ftr);
 extern int godot_js_pwa_cb(void (*p_callback)());
 extern int godot_js_pwa_update();
+
+// Range-backed PCK. Doubles carry exact integer offsets up to Number.MAX_SAFE_INTEGER.
+extern double godot_js_pck_get_size();
+extern int godot_js_pck_path_size();
+extern void godot_js_pck_get_path(char *r_path, int p_size);
+extern int godot_js_pck_read(double p_offset, uint8_t *p_dst, uint32_t p_length);
+extern int godot_js_pck_entry_path_size(int p_entry);
+extern void godot_js_pck_get_entry(int p_entry, char *r_path, int p_path_size, double *r_ranges, uint8_t *r_md5);
+extern void godot_js_pck_request_full(int p_entry);
+extern int godot_js_pck_poll_ready(int *r_success);
+extern void godot_js_pck_evict_middle(int p_entry);
 
 // Input
 extern void godot_js_input_mouse_button_cb(int (*p_callback)(int p_pressed, int p_button, double p_x, double p_y, int p_modifiers));

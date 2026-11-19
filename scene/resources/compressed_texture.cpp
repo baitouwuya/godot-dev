@@ -36,16 +36,17 @@
 #include "scene/resources/bit_map.h"
 #include "servers/rendering/rendering_server.h"
 
-Error CompressedTexture2D::_load_data(const String &p_path, int &r_width, int &r_height, Ref<Image> &image, bool &r_request_3d, bool &r_request_normal, bool &r_request_roughness, int &mipmap_limit, int p_size_limit) {
+#ifdef WEB_ENABLED
+#include "platform/web/web_pack_stream.h"
+#endif
+
+Error CompressedTexture2D::_load_data(const Ref<FileAccess> &f, int &r_width, int &r_height, Ref<Image> &image, bool &r_request_3d, bool &r_request_normal, bool &r_request_roughness, int &mipmap_limit, int p_size_limit) {
 	alpha_cache.unref();
 
 	ERR_FAIL_COND_V(image.is_null(), ERR_INVALID_PARAMETER);
 
-	Ref<FileAccess> f = FileAccess::open(p_path, FileAccess::READ);
-	ERR_FAIL_COND_V_MSG(f.is_null(), ERR_CANT_OPEN, vformat("Unable to open file: %s.", p_path));
-
 	uint8_t header[4];
-	f->get_buffer(header, 4);
+	ERR_FAIL_COND_V(f->get_buffer(header, sizeof(header)) != sizeof(header), ERR_FILE_CORRUPT);
 	if (header[0] != 'G' || header[1] != 'S' || header[2] != 'T' || header[3] != '2') {
 		ERR_FAIL_V_MSG(ERR_FILE_CORRUPT, "Compressed texture file is corrupt (Bad header).");
 	}
@@ -130,6 +131,11 @@ Image::Format CompressedTexture2D::get_format() const {
 }
 
 Error CompressedTexture2D::load(const String &p_path) {
+	const Ref<FileAccess> f = FileAccess::open(p_path, FileAccess::READ);
+	ERR_FAIL_COND_V_MSG(f.is_null(), ERR_CANT_OPEN, vformat("Unable to open file: %s.", p_path));
+#ifdef WEB_ENABLED
+	const auto partial = WebPackStream::query_partial(f);
+#endif
 	int lw, lh;
 	Ref<Image> image;
 	image.instantiate();
@@ -139,7 +145,7 @@ Error CompressedTexture2D::load(const String &p_path) {
 	bool request_roughness;
 	int mipmap_limit;
 
-	Error err = _load_data(p_path, lw, lh, image, request_3d, request_normal, request_roughness, mipmap_limit);
+	Error err = _load_data(f, lw, lh, image, request_3d, request_normal, request_roughness, mipmap_limit);
 	if (err) {
 		return err;
 	}
@@ -193,6 +199,17 @@ Error CompressedTexture2D::load(const String &p_path) {
 #endif
 	notify_property_list_changed();
 	emit_changed();
+#ifdef WEB_ENABLED
+	if (partial && path_to_file == p_path) {
+		WebPackStream::register_texture_upgrade(partial, p_path, *this, [](const String &p_source, Resource &r_resource) {
+			CompressedTexture2D &texture = static_cast<CompressedTexture2D &>(r_resource);
+			if (texture.get_load_path() == p_source) {
+				const Error error = texture.load(p_source);
+				ERR_FAIL_COND_MSG(error != OK, vformat("Failed to upgrade streamed texture '%s'.", p_source));
+			}
+		});
+	}
+#endif
 	return OK;
 }
 
@@ -422,26 +439,28 @@ Ref<Image> CompressedTexture2D::load_image_from_file(Ref<FileAccess> f, int p_si
 		sh = MAX(sh >> 1, 1);
 		return img;
 	} else if (data_format == DATA_FORMAT_IMAGE) {
-		int size = Image::get_image_data_size(w, h, format, mipmaps ? true : false);
+		ERR_FAIL_COND_V(!w || !h || uint64_t(w) * h > Image::MAX_PIXELS || format < 0 || format >= Image::FORMAT_MAX, Ref<Image>());
+		ERR_FAIL_COND_V(mipmaps && mipmaps != uint32_t(Image::get_image_required_mipmaps(w, h, format)), Ref<Image>());
+		const int64_t size = Image::get_image_data_size(w, h, format, mipmaps != 0);
+		const uint64_t data_start = f->get_position();
+		uint64_t tail_start = 0;
+#ifdef WEB_ENABLED
+		tail_start = WebPackStream::query_partial(f).tail_start;
+#endif
+		ERR_FAIL_COND_V(data_start > f->get_length() || uint64_t(size) > f->get_length() - data_start, Ref<Image>());
 
 		for (uint32_t i = 0; i < mipmaps + 1; i++) {
 			int tw, th;
-			int ofs = Image::get_image_mipmap_offset_and_dimensions(w, h, format, i, tw, th);
+			const int64_t ofs = Image::get_image_mipmap_offset_and_dimensions(w, h, format, i, tw, th);
 
-			if (p_size_limit > 0 && i < mipmaps && (p_size_limit > tw || p_size_limit > th)) {
-				if (ofs) {
-					f->seek(f->get_position() + ofs);
-				}
-				continue; //oops, size limit enforced, go to next
+			if (data_start + uint64_t(ofs) < tail_start || (p_size_limit > 0 && i < mipmaps && (tw > p_size_limit || th > p_size_limit))) {
+				continue;
 			}
 
+			f->seek(data_start + uint64_t(ofs));
 			Vector<uint8_t> data;
-			data.resize(size - ofs);
-
-			{
-				uint8_t *wr = data.ptrw();
-				f->get_buffer(wr, data.size());
-			}
+			ERR_FAIL_COND_V(data.resize(size - ofs) != OK, Ref<Image>());
+			ERR_FAIL_COND_V(f->get_buffer(data.ptrw(), data.size()) != uint64_t(data.size()), Ref<Image>());
 
 			Ref<Image> image = Image::create_from_data(tw, th, mipmaps - i ? true : false, format, data);
 

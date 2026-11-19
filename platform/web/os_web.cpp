@@ -35,6 +35,7 @@
 #include "godot_js.h"
 #include "ip_web.h"
 #include "net_socket_web.h"
+#include "web_pack_stream.h"
 
 #include "core/io/file_access.h"
 #include "core/os/main_loop.h"
@@ -58,6 +59,7 @@ void OS_Web::alert(const String &p_alert, const String &p_title) {
 // Lifecycle
 void OS_Web::initialize() {
 	OS_Unix::initialize_core();
+	WebPackStream::initialize();
 	IPWeb::make_default();
 	NetSocketWeb::make_default();
 	DisplayServerWeb::register_web_driver();
@@ -96,10 +98,18 @@ bool OS_Web::main_loop_iterate() {
 		if (status == ERR_BUSY) {
 			return false; // Return to JS so queue and MapAsync callbacks can run.
 		}
-		ERR_FAIL_COND_V_MSG(status != OK, true, "Web rendering device or asynchronous readback failed.");
+		if (status != OK) {
+			set_exit_code(EXIT_FAILURE);
+			ERR_FAIL_V_MSG(true, "Web rendering device or asynchronous readback failed.");
+		}
 	}
 #endif
-	return Main::iteration();
+	const bool quit = Main::iteration();
+	if (!quit) {
+		// Also service idle iterations: completing an upgrade can request its own redraw.
+		WebPackStream::poll_upgrades(2500);
+	}
+	return quit;
 }
 
 void OS_Web::delete_main_loop() {

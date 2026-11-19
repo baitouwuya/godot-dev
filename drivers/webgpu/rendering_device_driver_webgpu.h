@@ -136,8 +136,12 @@ struct ShaderResource;
 struct ShaderVariant;
 struct PreparedShader;
 struct LogicalUniformSet;
+struct BindGroupRecipe;
 struct BindGroupResource;
+struct BindGroupScratch;
 struct PipelineResource;
+
+using LogicalUniformSets = std::map<uint32_t, std::shared_ptr<LogicalUniformSet>>;
 
 struct PushConstantSlice {
 	std::shared_ptr<BufferResource> buffer;
@@ -352,7 +356,11 @@ protected:
 private:
 	std::vector<std::shared_ptr<godot::webgpu::PushPage>> push_pool;
 	std::shared_ptr<godot::webgpu::PushPage> acquire_push_page(uint32_t p_size);
-	std::shared_ptr<godot::webgpu::PipelineResource> materialize_pipeline(godot::webgpu::PipelineResource &r_pipeline, const std::map<uint32_t, std::shared_ptr<godot::webgpu::LogicalUniformSet>> &p_sets);
+	std::shared_ptr<godot::webgpu::PipelineResource> materialize_pipeline(godot::webgpu::PipelineResource &r_pipeline, const godot::webgpu::LogicalUniformSets &p_sets);
+	Error get_bind_group(godot::webgpu::ShaderVariant &r_shader, uint32_t p_group, const godot::webgpu::LogicalUniformSets &p_sets,
+			const godot::webgpu::PushConstantSlice *p_push, godot::webgpu::BindGroupScratch &r_scratch, std::shared_ptr<godot::webgpu::BindGroupResource> &r_group);
+	std::map<std::vector<uint64_t>, std::weak_ptr<godot::webgpu::BindGroupRecipe>> bind_group_recipes;
+	godot::webgpu::SubmitSerial bind_group_recipes_cleanup = 0;
 	bool prepare_dispatch(godot::webgpu::CommandRecording &r_cmd, bool p_compute, bool p_indexed, const std::shared_ptr<godot::webgpu::BufferResource> &p_indirect = {});
 	void draw_indirect_count(CommandBufferID p_cmd, BufferID p_arguments, uint64_t p_offset, BufferID p_count_buffer, uint64_t p_count_offset,
 			uint32_t p_max_draw_count, uint32_t p_stride, bool p_indexed);

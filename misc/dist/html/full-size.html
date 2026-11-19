@@ -196,6 +196,81 @@ body {
 	white-space: pre-wrap;
 	word-break: break-word;
 }
+
+#stream-pill {
+	position: fixed;
+	top: 14px;
+	right: 14px;
+	display: none;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 220px;
+	padding: 8px 12px;
+	border-radius: 10px;
+	background: var(--surface-card);
+	border: 1px solid var(--surface-border);
+	box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
+	backdrop-filter: blur(10px);
+	pointer-events: none;
+	opacity: 1;
+	transition: opacity 0.35s ease;
+	z-index: 9;
+}
+
+#stream-pill.is-done {
+	opacity: 0;
+}
+
+#stream-pill-row {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 12px;
+	font-size: 11px;
+	font-weight: 500;
+	color: var(--text-primary);
+	font-variant-numeric: tabular-nums;
+}
+
+#stream-pill-title {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+#stream-pill-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: #60a5fa;
+	box-shadow: 0 0 8px rgba(96, 165, 250, 0.7);
+	animation: stream-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes stream-pulse {
+	0%, 100% { opacity: 1; transform: scale(1); }
+	50% { opacity: 0.45; transform: scale(0.82); }
+}
+
+#stream-pill-count {
+	color: var(--text-muted);
+}
+
+#stream-pill-track {
+	width: 100%;
+	height: 3px;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.12);
+	overflow: hidden;
+}
+
+#stream-pill-bar {
+	height: 100%;
+	width: 0%;
+	border-radius: 999px;
+	background: linear-gradient(90deg, #3b82f6, #38bdf8);
+	transition: width 0.15s ease-out;
+}
 		</style>
 		$GODOT_HEAD_INCLUDE
 	</head>
@@ -226,6 +301,16 @@ body {
 			</div>
 		</div>
 
+		<div id="stream-pill" aria-live="polite">
+			<div id="stream-pill-row">
+				<span id="stream-pill-title"><span id="stream-pill-dot"></span><span id="stream-pill-text">Streaming HD Textures</span></span>
+				<span id="stream-pill-count">0%</span>
+			</div>
+			<div id="stream-pill-track">
+				<div id="stream-pill-bar"></div>
+			</div>
+		</div>
+
 		<script src="$GODOT_URL"></script>
 		<script>
 const GODOT_CONFIG = $GODOT_CONFIG;
@@ -242,9 +327,46 @@ const engine = new Engine(GODOT_CONFIG);
 	const statusLabel = document.getElementById('status-label');
 	const statusNotice = document.getElementById('status-notice');
 	const statusNoticeBody = document.getElementById('status-notice-body');
+	const streamPill = document.getElementById('stream-pill');
+	const streamPillText = document.getElementById('stream-pill-text');
+	const streamPillCount = document.getElementById('stream-pill-count');
+	const streamPillBar = document.getElementById('stream-pill-bar');
 
 	let initializing = true;
 	let statusMode = '';
+	let maxRatio = 0;
+	let streamHideTimer = null;
+
+	function updateStreamPill(state) {
+		if (!state || !state['total'] || state['total'] <= 0) {
+			return;
+		}
+		const done = state['completed'] || 0;
+		const failed = state['failed'] || 0;
+		const total = state['total'];
+		const byteRatio = state['bytesTotal'] > 0 ? (state['bytesLoaded'] / state['bytesTotal']) : (done / total);
+		const pct = Math.min(100, Math.round(Math.max(done / total, byteRatio) * 100));
+		streamPill.style.display = 'flex';
+		streamPillBar.style.width = pct + '%';
+		streamPillCount.textContent = done + ' / ' + total + ' · ' + pct + '%';
+		if (done + failed >= total && !state['active']) {
+			streamPillBar.style.width = '100%';
+			streamPillCount.textContent = done + ' / ' + total + ' · 100%';
+			streamPillText.textContent = 'HD Textures Ready';
+			if (!streamHideTimer) {
+				streamHideTimer = setTimeout(() => {
+					streamPill.classList.add('is-done');
+					setTimeout(() => {
+						streamPill.style.display = 'none';
+					}, 380);
+				}, 1600);
+			}
+		} else {
+			streamPillText.textContent = 'Streaming HD Textures';
+		}
+	}
+
+	window['onGodotStreamProgress'] = updateStreamPill;
 
 	function formatBackendBadge(info) {
 		if (!info || !info.driver) {
@@ -334,16 +456,22 @@ const engine = new Engine(GODOT_CONFIG);
 	} else {
 		setStatusMode('progress');
 		engine.startGame({
+			'progressiveTextureMips': !GODOT_THREADS_ENABLED,
 			'onProgress': function (current, total) {
 				refreshBackendBadge();
-				if (current > 0 && total > 0) {
-					const ratio = Math.min(1, current / total);
-					const pct = Math.round(ratio * 100);
+				const startup = window['godotStartupStatus'];
+				if ((current > 0 && total > 0) || (startup && startup['ratio'] > 0)) {
+					const rawRatio = total > 0 ? (current / total) : (startup ? startup['ratio'] : 0);
+					maxRatio = Math.max(maxRatio, Math.min(1, rawRatio));
+					const pct = Math.round(maxRatio * 100);
 					statusTrack.classList.remove('is-indeterminate');
 					statusBar.style.width = pct + '%';
-					statusLabel.textContent = pct < 100 ? ('Loading assets · ' + pct + '%') : 'Initializing GPU pipelines…';
-					statusProgress.value = current;
-					statusProgress.max = total;
+					const phaseLabel = (startup && startup['label'])
+						? startup['label']
+						: (pct <= 50 ? 'Streaming boot assets' : (pct < 90 ? 'Initializing renderer & scene' : 'Preparing first frame'));
+					statusLabel.textContent = phaseLabel.replace(/(\.\.\.|…)$/, '') + ' · ' + pct + '%';
+					statusProgress.value = pct;
+					statusProgress.max = 100;
 				} else {
 					statusTrack.classList.add('is-indeterminate');
 					statusLabel.textContent = 'Preparing runtime…';
@@ -353,6 +481,9 @@ const engine = new Engine(GODOT_CONFIG);
 			},
 		}).then(() => {
 			setStatusMode('hidden');
+			if (window['godotStreamState']) {
+				updateStreamPill(window['godotStreamState']);
+			}
 		}, displayFailureNotice);
 	}
 }());

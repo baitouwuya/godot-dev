@@ -5,73 +5,126 @@ using namespace godot::webgpu;
 namespace godot::webgpu {
 namespace {
 
-bool collect_shader_usage(const CommandRecording &p_cmd, const ShaderPlan &p_plan, UsageScope &r_scope) {
-	for (const auto &binding : p_plan.bindings) {
-		const BindingKey &key = binding.key;
-		const auto set = p_cmd.sets.find(key.set);
-		if (key.role == Role::SAMPLER || key.role == Role::PUSH_CONSTANT || set == p_cmd.sets.end()) {
-			continue;
-		}
-		const auto uniform = set->second->bindings.find(key);
-		if (uniform == set->second->bindings.end()) {
-			continue; // build_bind_group diagnoses a missing required binding.
-		}
-		const auto &value = uniform->second;
-		if (value.buffer) {
-			const ScopeUse use = key.role == Role::STORAGE_BUFFER ? (binding.read_only ? ScopeUse::STORAGE_READ : ScopeUse::STORAGE_WRITE) : ScopeUse::READ;
-			if (!r_scope.add({ value.buffer.get() }, use)) {
-				return false;
-			}
-		} else if (value.texture) {
-			const auto &texture = *value.texture;
-			const bool storage = key.role == Role::STORAGE_TEXTURE || binding.format.atomic_buffer;
-			const ScopeUse use = storage ? (binding.format.access == ImageAccess::READ ? ScopeUse::STORAGE_READ : ScopeUse::STORAGE_WRITE) : ScopeUse::READ;
-			if (!r_scope.add_texture(texture, use, storage ? 1 : texture.mip_count, texture.layer_count,
-					texture.format.depth ? WGPUTextureAspect_DepthOnly : WGPUTextureAspect_All)) {
-				return false;
-			}
-		}
-	}
-	return true;
-}
+constexpr uint32_t DYNAMIC_FRAME_MASK = (1U << DYNAMIC_FRAME_BITS) - 1;
+static_assert(MAX_DRIVER_FRAMES >= 3 && MAX_DRIVER_FRAMES - 1 <= DYNAMIC_FRAME_MASK);
+static_assert(MAX_DRIVER_FRAMES - 1 < (1U << VERTEX_FRAME_BITS));
 
 void bind_sets(CommandRecording &r_cmd, VectorView<RDD::UniformSetID> p_sets, uint32_t p_first, uint32_t p_count, uint32_t p_dynamic_offsets) {
 	uint32_t shift = 0;
 	for (uint32_t i = 0; i < p_count; ++i) {
 		const auto &set = resource<LogicalUniformSet>(p_sets[i]);
 		DEV_ASSERT(set->set == p_first + i);
+		const uint32_t bits = set->dynamic.size() * DYNAMIC_FRAME_BITS;
+		ERR_FAIL_COND(shift + bits > sizeof(p_dynamic_offsets) * CHAR_BIT);
 		r_cmd.sets[set->set] = set;
-		for (const auto &buffer : set->dynamic) {
-			DEV_ASSERT(shift < sizeof(p_dynamic_offsets) * CHAR_BIT);
-			r_cmd.frames[buffer.get()] = (p_dynamic_offsets >> shift) & ((1u << DYNAMIC_FRAME_BITS) - 1);
-			shift += DYNAMIC_FRAME_BITS;
+		if (bits > 0) {
+			r_cmd.frames[set->set] = p_dynamic_offsets >> shift;
+		}
+		shift += bits;
+	}
+}
+
+bool writable_alias(const PhysicalBindGroup &p_a, const PhysicalBindGroup &p_b, bool p_same_slot) {
+	const auto &a_buffers = p_a.group->writable_buffers;
+	const auto &b_buffers = p_b.group->writable_buffers;
+	for (size_t i = 0; i < a_buffers.size(); ++i) {
+		const auto &a = a_buffers[i];
+		const uint64_t a_offset = a.dynamic_index == UINT32_MAX ? 0 : p_a.dynamic_offsets[a.dynamic_index];
+		for (size_t j = p_same_slot ? i + 1 : 0; j < b_buffers.size(); ++j) {
+			const auto &b = b_buffers[j];
+			if (a.resource != b.resource || !(a.stages & b.stages)) {
+				continue;
+			}
+			const uint64_t b_offset = b.dynamic_index == UINT32_MAX ? 0 : p_b.dynamic_offsets[b.dynamic_index];
+			if (a_offset < b_offset + b.size && b_offset < a_offset + a.size) {
+				return true;
+			}
 		}
 	}
+	const auto &a_textures = p_a.group->writable_textures;
+	const auto &b_textures = p_b.group->writable_textures;
+	for (size_t i = 0; i < a_textures.size(); ++i) {
+		for (size_t j = p_same_slot ? i + 1 : 0; j < b_textures.size(); ++j) {
+			if ((a_textures[i].stages & b_textures[j].stages) && a_textures[i].range.overlaps(b_textures[j].range)) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool has_writes(const BindGroupResource &p_group) {
+	return !p_group.writable_buffers.empty() || !p_group.writable_textures.empty();
+}
+
+bool can_read_inputs(const CommandRecording &p_cmd, const UsageScope &p_scope, bool p_compute, bool p_indexed, const BufferResource *p_indirect) {
+	if (p_scope.write_buffers.empty()) {
+		return true;
+	}
+	if (p_indirect && !p_scope.can_read_buffer(p_indirect)) {
+		return false;
+	}
+	if (!p_compute) {
+		for (uint32_t slot : p_cmd.pipeline->vertex_bindings) {
+			if (!p_scope.can_read_buffer(p_cmd.vertex[slot].buffer.get())) {
+				return false;
+			}
+		}
+		if (p_indexed && !p_scope.can_read_buffer(p_cmd.index.buffer.get())) {
+			return false;
+		}
+	}
+	return true;
 }
 
 void apply_vertex_state(CommandRecording &r_cmd, bool p_indexed) {
 	const auto pass = r_cmd.render.get();
 	const auto &rect = r_cmd.viewport;
-	wgpuRenderPassEncoderSetViewport(pass, rect.position.x, rect.position.y, rect.size.x, rect.size.y, 0., 1.);
+	if (r_cmd.active_viewport != rect) {
+		wgpuRenderPassEncoderSetViewport(pass, rect.position.x, rect.position.y, rect.size.x, rect.size.y, 0.f, 1.f);
+		r_cmd.active_viewport = rect;
+	}
 	const Rect2i scissor = r_cmd.scissor.intersection(Rect2i(0, 0, r_cmd.framebuffer->width, r_cmd.framebuffer->height));
-	wgpuRenderPassEncoderSetScissorRect(pass, scissor.position.x, scissor.position.y, scissor.size.x, scissor.size.y);
-	const auto blend = wg_color(r_cmd.blend.value_or(r_cmd.pipeline->blend_constant));
-	wgpuRenderPassEncoderSetBlendConstant(pass, &blend);
-	wgpuRenderPassEncoderSetStencilReference(pass, r_cmd.pipeline->stencil_reference);
+	if (r_cmd.active_scissor != scissor) {
+		wgpuRenderPassEncoderSetScissorRect(pass, scissor.position.x, scissor.position.y, scissor.size.x, scissor.size.y);
+		r_cmd.active_scissor = scissor;
+	}
+	const auto blend = r_cmd.blend.value_or(r_cmd.pipeline->blend_constant);
+	if (r_cmd.active_blend != blend) {
+		const auto color = wg_color(blend);
+		wgpuRenderPassEncoderSetBlendConstant(pass, &color);
+		r_cmd.active_blend = blend;
+	}
+	const uint32_t stencil = r_cmd.pipeline->stencil_reference;
+	if (r_cmd.active_stencil_reference != stencil) {
+		wgpuRenderPassEncoderSetStencilReference(pass, stencil);
+		r_cmd.active_stencil_reference = stencil;
+	}
+	if (r_cmd.active_vertex_buffers.size() < r_cmd.pipeline->vertex_bindings.size()) {
+		r_cmd.active_vertex_buffers.resize(r_cmd.pipeline->vertex_bindings.size());
+	}
 	for (uint32_t slot = 0; slot < r_cmd.pipeline->vertex_bindings.size(); ++slot) {
 		const auto &v = r_cmd.vertex[r_cmd.pipeline->vertex_bindings[slot]];
 		const auto &buffer = v.buffer;
 		DEV_ASSERT(buffer && v.offset < buffer->size);
-		wgpuRenderPassEncoderSetVertexBuffer(pass, slot, buffer->buffer.get(), buffer->offset(v.frame) + v.offset, buffer->size - v.offset);
-		r_cmd.keep(buffer);
-		if (buffer->access == BufferAccess::DYNAMIC) {
-			r_cmd.keep(buffer->pages[v.frame]);
+		const ActiveBufferBinding target{ buffer->buffer.get(), buffer->offset(v.frame) + v.offset, buffer->size - v.offset };
+		if (!(r_cmd.active_vertex_buffers[slot] == target)) {
+			wgpuRenderPassEncoderSetVertexBuffer(pass, slot, target.buffer, target.offset, target.size);
+			r_cmd.active_vertex_buffers[slot] = target;
+			r_cmd.keep_render_read(buffer);
+			if (buffer->access == BufferAccess::DYNAMIC) {
+				r_cmd.keep(buffer->pages[v.frame]);
+			}
 		}
 	}
 	if (p_indexed) {
 		const auto &i = r_cmd.index;
-		wgpuRenderPassEncoderSetIndexBuffer(pass, i.buffer->buffer.get(), r_cmd.index_format, i.offset, i.buffer->size - i.offset);
-		r_cmd.keep(i.buffer);
+		const ActiveIndexBinding target{ { i.buffer->buffer.get(), i.offset, i.buffer->size - i.offset }, r_cmd.index_format };
+		if (!(r_cmd.active_index_buffer == target)) {
+			wgpuRenderPassEncoderSetIndexBuffer(pass, target.buffer.buffer, target.format, target.buffer.offset, target.buffer.size);
+			r_cmd.active_index_buffer = target;
+			r_cmd.keep_render_read(i.buffer);
+		}
 	}
 }
 
@@ -85,61 +138,127 @@ bool RenderingDeviceDriverWebGPU::prepare_dispatch(CommandRecording &r_cmd, bool
 		return false; // Pipeline realization has already reported the reason.
 	}
 	const auto &variant = pipeline->shader;
-	UsageScope usage;
-	ERR_FAIL_COND_V_MSG(!collect_shader_usage(r_cmd, variant->prepared->plan, usage), false, "Conflicting WebGPU bindings in a single draw or dispatch.");
-	if (p_indirect) {
-		ERR_FAIL_COND_V_MSG(!usage.add({ p_indirect.get() }, ScopeUse::READ), false, "Indirect arguments are writable bindings of the same dispatch or draw.");
-		r_cmd.keep(p_indirect);
-	}
-	if (!p_compute) {
-		for (uint32_t slot : r_cmd.pipeline->vertex_bindings) {
-			ERR_FAIL_COND_V(slot >= r_cmd.vertex.size() || !r_cmd.vertex[slot].buffer, false);
-			ERR_FAIL_COND_V_MSG(!usage.add({ r_cmd.vertex[slot].buffer.get() }, ScopeUse::READ), false, "The vertex buffer is writable in the same draw.");
-		}
-		if (p_indexed) {
-			ERR_FAIL_COND_V(!r_cmd.index.buffer, false);
-			ERR_FAIL_COND_V_MSG(!usage.add({ r_cmd.index.buffer.get() }, ScopeUse::READ), false, "The index buffer is writable in the same draw.");
-		}
-	}
-	std::vector<PhysicalBindGroup> groups(variant->groups.size());
 	const auto &recipe = *r_cmd.pipeline;
-	for (uint32_t group = 0; group < groups.size(); ++group) {
-		const Error error = build_bind_group(*variant, group, r_cmd.sets, r_cmd.frames, r_cmd.push.page ? &r_cmd.push : nullptr, groups[group]);
+	if (!p_compute) {
+		for (uint32_t slot : recipe.vertex_bindings) {
+			ERR_FAIL_COND_V(slot >= r_cmd.vertex.size() || !r_cmd.vertex[slot].buffer, false);
+		}
+		ERR_FAIL_COND_V(p_indexed && !r_cmd.index.buffer, false);
+	}
+	const uint32_t group_count = variant->groups.size();
+	auto &groups = r_cmd.draw_groups;
+	if (groups.size() < group_count) {
+		groups.resize(group_count);
+	}
+	if (r_cmd.active_bind_groups.size() < group_count) {
+		r_cmd.active_bind_groups.resize(group_count);
+	}
+	const auto *push = r_cmd.push.page ? &r_cmd.push : nullptr;
+	for (uint32_t i = 0; i < group_count; ++i) {
+		auto &group = groups[i];
+		const Error error = get_bind_group(*variant, i, r_cmd.sets, push, r_cmd.bind_group_scratch, group.group);
 		ERR_FAIL_COND_V_MSG(error != OK, false,
-				vformat("WebGPU %s failed to bind group %d for shader '%s' (pass '%s').", p_compute ? "dispatch" : "draw", group,
+				vformat("WebGPU %s failed to bind group %d for shader '%s' (pass '%s').", p_compute ? "dispatch" : "draw", i,
 						String::utf8(recipe.label.empty() ? recipe.source->source->shader_name.get_data() : recipe.label.c_str()),
 						r_cmd.labels.empty() ? String("unlabeled") : String::utf8(r_cmd.labels.back().c_str())));
+		group.dynamic_offsets.clear();
+		group.uses.clear();
+		for (const auto &binding : group.group->dynamic) {
+			if (!binding.buffer) {
+				group.dynamic_offsets.push_back(push->offset);
+				group.uses.push_back(push->page);
+			} else {
+				const auto it = r_cmd.frames.find(binding.set);
+				DEV_ASSERT(it != r_cmd.frames.end() && binding.frame_shift <= 32 - DYNAMIC_FRAME_BITS);
+				const uint32_t frame = (it->second >> binding.frame_shift) & DYNAMIC_FRAME_MASK;
+				DEV_ASSERT(frame < frame_count && binding.buffer->offset(frame) <= UINT32_MAX);
+				group.dynamic_offsets.push_back(binding.buffer->offset(frame));
+				group.uses.push_back(binding.buffer->pages[frame]);
+			}
+		}
+	}
+	// Scope compatibility permits repeated storage writes in a pass. A draw or
+	// dispatch still cannot alias writable binding ranges visible to the same stage.
+	for (uint32_t i = 0; i < group_count; ++i) {
+		const auto &a = groups[i];
+		if (!has_writes(*a.group)) {
+			continue;
+		}
+		ERR_FAIL_COND_V_MSG(a.group->internal_conflict || writable_alias(a, a, true), false, "Conflicting usages inside a WebGPU bind group.");
+		ERR_FAIL_COND_V_MSG(!can_read_inputs(r_cmd, a.group->usage, p_compute, p_indexed, p_indirect.get()), false,
+				"A vertex, index, or indirect buffer is a writable binding of the same WebGPU draw or dispatch.");
+		for (uint32_t j = 0; j < group_count; ++j) {
+			const auto &b = groups[j];
+			if (j == i || (j < i && has_writes(*b.group))) {
+				continue;
+			}
+			ERR_FAIL_COND_V_MSG(!a.group->usage.compatible(b.group->usage) || writable_alias(a, b, false), false,
+					"Conflicting WebGPU bind groups in a single draw or dispatch.");
+		}
 	}
 	if (p_compute) {
 		r_cmd.open_compute(); // WebGPU validates the accumulated usages per dispatch, not per compute pass.
 		ERR_FAIL_COND_V(!r_cmd.compute, false);
-		wgpuComputePassEncoderSetPipeline(r_cmd.compute.get(), pipeline->compute.get());
+		const auto handle = pipeline->compute.get();
+		if (r_cmd.active_compute_pipeline != handle) {
+			wgpuComputePassEncoderSetPipeline(r_cmd.compute.get(), handle);
+			r_cmd.active_compute_pipeline = handle;
+			r_cmd.keep(pipeline);
+		}
+		if (p_indirect) {
+			r_cmd.keep(p_indirect);
+		}
 	} else {
 		r_cmd.open_render();
 		ERR_FAIL_COND_V(!r_cmd.render, false);
-		ERR_FAIL_COND_V_MSG(!r_cmd.attachments.compatible(usage), false, "A draw cannot sample or write its own writable attachment.");
-		if (!r_cmd.scope.compatible(usage)) {
+		bool compatible = can_read_inputs(r_cmd, r_cmd.scope, false, p_indexed, p_indirect.get());
+		for (uint32_t i = 0; i < group_count && compatible; ++i) {
+			const auto &group = *groups[i].group;
+			compatible = r_cmd.active_bind_groups[i].handle == group.handle.get() || r_cmd.scoped(&group) || r_cmd.scope.compatible(group.usage);
+		}
+		if (!compatible) {
+			for (uint32_t i = 0; i < group_count; ++i) {
+				ERR_FAIL_COND_V_MSG(!r_cmd.attachments.compatible(groups[i].group->usage), false,
+						"A WebGPU draw has a binding incompatible with its own attachment.");
+			}
 			r_cmd.end_render();
 			r_cmd.open_render();
 			ERR_FAIL_COND_V(!r_cmd.render, false);
 		}
-		r_cmd.scope.merge(usage);
-		wgpuRenderPassEncoderSetPipeline(r_cmd.render.get(), pipeline->render_variant(p_indexed ? r_cmd.index_format : WGPUIndexFormat_Undefined));
+		r_cmd.trim_render_slots(group_count, recipe.vertex_bindings.size(), state->limits.maxBindGroupsPlusVertexBuffers);
+		const auto handle = pipeline->render_variant(p_indexed ? r_cmd.index_format : WGPUIndexFormat_Undefined);
+		if (r_cmd.active_render_pipeline != handle) {
+			wgpuRenderPassEncoderSetPipeline(r_cmd.render.get(), handle);
+			r_cmd.active_render_pipeline = handle;
+			r_cmd.keep(pipeline);
+		}
 		// The logical pipeline owns the same fixed-function and vertex state as the materialized variant.
 		apply_vertex_state(r_cmd, p_indexed);
+		if (p_indirect) {
+			r_cmd.keep_render_read(p_indirect);
+		}
 	}
-	for (uint32_t i = 0; i < groups.size(); ++i) {
-		const auto &group = groups[i];
-		if (p_compute) {
-			wgpuComputePassEncoderSetBindGroup(r_cmd.compute.get(), i, group.group->handle.get(), group.dynamic_offsets.size(), group.dynamic_offsets.data());
-		} else {
-			wgpuRenderPassEncoderSetBindGroup(r_cmd.render.get(), i, group.group->handle.get(), group.dynamic_offsets.size(), group.dynamic_offsets.data());
+	// Pipeline changes do not clear WebGPU's per-slot bind group state.
+	for (uint32_t i = 0; i < group_count; ++i) {
+		auto &group = groups[i];
+		auto &active = r_cmd.active_bind_groups[i];
+		const auto handle = group.group->handle.get();
+		if (active.handle != handle || active.offsets != group.dynamic_offsets) {
+			if (p_compute) {
+				wgpuComputePassEncoderSetBindGroup(r_cmd.compute.get(), i, handle, group.dynamic_offsets.size(), group.dynamic_offsets.data());
+			} else {
+				wgpuRenderPassEncoderSetBindGroup(r_cmd.render.get(), i, handle, group.dynamic_offsets.size(), group.dynamic_offsets.data());
+			}
+			active.handle = handle;
+			active.offsets = group.dynamic_offsets;
+			r_cmd.keep_bind_group(group.group, !p_compute);
 		}
 		for (const auto &use : group.uses) {
 			r_cmd.keep(use);
 		}
+		group.uses.clear();
+		group.group.reset();
 	}
-	r_cmd.keep(pipeline);
 	return true;
 }
 
