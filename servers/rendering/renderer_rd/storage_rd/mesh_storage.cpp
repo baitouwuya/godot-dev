@@ -374,10 +374,14 @@ void MeshStorage::mesh_add_surface(RID p_mesh, const RenderingServerTypes::Surfa
 	s->format = new_surface.format;
 	s->primitive = new_surface.primitive;
 
+	const bool async_gpu = RD::get_singleton()->get_driver_trait(RDD::API_TRAIT_ASYNC_GPU_COMPLETION) != 0;
 	const bool use_as_storage = (new_surface.skin_data.size() || mesh->blend_shape_count > 0);
 	const BitField<RD::BufferCreationBits> as_storage_flag = use_as_storage ? RD::BUFFER_CREATION_AS_STORAGE_BIT : 0;
 
 	if (new_surface.vertex_data.size()) {
+		if (async_gpu) {
+			s->vertex_data_cache = new_surface.vertex_data;
+		}
 		// If we have an uncompressed surface that contains normals, but not tangents, we need to differentiate the array
 		// from a compressed array in the shader. To do so, we allow the normal to read 4 components out of the buffer
 		// But only give it 2 components per normal. So essentially, each vertex reads the next normal in normal.zw.
@@ -398,10 +402,16 @@ void MeshStorage::mesh_add_surface(RID p_mesh, const RenderingServerTypes::Surfa
 	}
 
 	if (new_surface.attribute_data.size()) {
+		if (async_gpu) {
+			s->attribute_data_cache = new_surface.attribute_data;
+		}
 		s->attribute_buffer = RD::get_singleton()->vertex_buffer_create(new_surface.attribute_data.size(), new_surface.attribute_data);
 		s->attribute_buffer_size = new_surface.attribute_data.size();
 	}
 	if (new_surface.skin_data.size()) {
+		if (async_gpu) {
+			s->skin_data_cache = new_surface.skin_data;
+		}
 		s->skin_buffer = RD::get_singleton()->vertex_buffer_create(new_surface.skin_data.size(), new_surface.skin_data, as_storage_flag);
 		s->skin_buffer_size = new_surface.skin_data.size();
 	}
@@ -413,6 +423,9 @@ void MeshStorage::mesh_add_surface(RID p_mesh, const RenderingServerTypes::Surfa
 	}
 
 	if (new_surface.index_count) {
+		if (async_gpu) {
+			s->index_data_cache = new_surface.index_data;
+		}
 		bool is_index_16 = new_surface.vertex_count <= 65536 && new_surface.vertex_count > 0;
 
 		s->index_buffer = RD::get_singleton()->index_buffer_create(new_surface.index_count, is_index_16 ? RD::INDEX_BUFFER_FORMAT_UINT16 : RD::INDEX_BUFFER_FORMAT_UINT32, new_surface.index_data, false);
@@ -430,6 +443,9 @@ void MeshStorage::mesh_add_surface(RID p_mesh, const RenderingServerTypes::Surfa
 				s->lods[i].index_array = RD::get_singleton()->index_array_create(s->lods[i].index_buffer, 0, indices);
 				s->lods[i].edge_length = new_surface.lods[i].edge_length;
 				s->lods[i].index_count = indices;
+				if (async_gpu) {
+					s->lods[i].index_data_cache = new_surface.lods[i].index_data;
+				}
 			}
 		}
 	}
@@ -443,6 +459,9 @@ void MeshStorage::mesh_add_surface(RID p_mesh, const RenderingServerTypes::Surfa
 	s->uv_scale = new_surface.uv_scale;
 
 	if (mesh->blend_shape_count > 0) {
+		if (async_gpu) {
+			s->blend_shape_data_cache = new_surface.blend_shape_data;
+		}
 		s->blend_shape_buffer = RD::get_singleton()->storage_buffer_create(new_surface.blend_shape_data.size(), new_surface.blend_shape_data);
 		s->blend_shape_buffer_size = new_surface.blend_shape_data.size();
 	}
@@ -573,12 +592,18 @@ void MeshStorage::mesh_surface_update_vertex_region(RID p_mesh, int p_surface, i
 	Mesh *mesh = mesh_owner.get_or_null(p_mesh);
 	ERR_FAIL_NULL(mesh);
 	ERR_FAIL_UNSIGNED_INDEX((uint32_t)p_surface, mesh->surface_count);
-	ERR_FAIL_COND(mesh->surfaces[p_surface]->vertex_buffer.is_null());
+	Mesh::Surface &s = *mesh->surfaces[p_surface];
+	ERR_FAIL_COND(s.vertex_buffer.is_null());
 
 	uint64_t data_size = p_data.size();
 	const uint8_t *r = p_data.ptr();
 
-	RD::get_singleton()->buffer_update(mesh->surfaces[p_surface]->vertex_buffer, p_offset, data_size, r);
+	if (!s.vertex_data_cache.is_empty() && p_offset >= 0 && uint64_t(p_offset) < uint64_t(s.vertex_data_cache.size())) {
+		const uint64_t copy_bytes = MIN(data_size, uint64_t(s.vertex_data_cache.size()) - uint64_t(p_offset));
+		memcpy(s.vertex_data_cache.ptrw() + p_offset, r, copy_bytes);
+	}
+
+	RD::get_singleton()->buffer_update(s.vertex_buffer, p_offset, data_size, r);
 }
 
 void MeshStorage::mesh_surface_update_attribute_region(RID p_mesh, int p_surface, int p_offset, const Vector<uint8_t> &p_data) {
@@ -586,12 +611,18 @@ void MeshStorage::mesh_surface_update_attribute_region(RID p_mesh, int p_surface
 	Mesh *mesh = mesh_owner.get_or_null(p_mesh);
 	ERR_FAIL_NULL(mesh);
 	ERR_FAIL_UNSIGNED_INDEX((uint32_t)p_surface, mesh->surface_count);
-	ERR_FAIL_COND(mesh->surfaces[p_surface]->attribute_buffer.is_null());
+	Mesh::Surface &s = *mesh->surfaces[p_surface];
+	ERR_FAIL_COND(s.attribute_buffer.is_null());
 
 	uint64_t data_size = p_data.size();
 	const uint8_t *r = p_data.ptr();
 
-	RD::get_singleton()->buffer_update(mesh->surfaces[p_surface]->attribute_buffer, p_offset, data_size, r);
+	if (!s.attribute_data_cache.is_empty() && p_offset >= 0 && uint64_t(p_offset) < uint64_t(s.attribute_data_cache.size())) {
+		const uint64_t copy_bytes = MIN(data_size, uint64_t(s.attribute_data_cache.size()) - uint64_t(p_offset));
+		memcpy(s.attribute_data_cache.ptrw() + p_offset, r, copy_bytes);
+	}
+
+	RD::get_singleton()->buffer_update(s.attribute_buffer, p_offset, data_size, r);
 }
 
 void MeshStorage::mesh_surface_update_skin_region(RID p_mesh, int p_surface, int p_offset, const Vector<uint8_t> &p_data) {
@@ -599,12 +630,18 @@ void MeshStorage::mesh_surface_update_skin_region(RID p_mesh, int p_surface, int
 	Mesh *mesh = mesh_owner.get_or_null(p_mesh);
 	ERR_FAIL_NULL(mesh);
 	ERR_FAIL_UNSIGNED_INDEX((uint32_t)p_surface, mesh->surface_count);
-	ERR_FAIL_COND(mesh->surfaces[p_surface]->skin_buffer.is_null());
+	Mesh::Surface &s = *mesh->surfaces[p_surface];
+	ERR_FAIL_COND(s.skin_buffer.is_null());
 
 	uint64_t data_size = p_data.size();
 	const uint8_t *r = p_data.ptr();
 
-	RD::get_singleton()->buffer_update(mesh->surfaces[p_surface]->skin_buffer, p_offset, data_size, r);
+	if (!s.skin_data_cache.is_empty() && p_offset >= 0 && uint64_t(p_offset) < uint64_t(s.skin_data_cache.size())) {
+		const uint64_t copy_bytes = MIN(data_size, uint64_t(s.skin_data_cache.size()) - uint64_t(p_offset));
+		memcpy(s.skin_data_cache.ptrw() + p_offset, r, copy_bytes);
+	}
+
+	RD::get_singleton()->buffer_update(s.skin_buffer, p_offset, data_size, r);
 }
 
 void RendererRD::MeshStorage::mesh_surface_update_index_region(RID p_mesh, int p_surface, int p_offset, const Vector<uint8_t> &p_data) {
@@ -612,12 +649,18 @@ void RendererRD::MeshStorage::mesh_surface_update_index_region(RID p_mesh, int p
 	Mesh *mesh = mesh_owner.get_or_null(p_mesh);
 	ERR_FAIL_NULL(mesh);
 	ERR_FAIL_UNSIGNED_INDEX((uint32_t)p_surface, mesh->surface_count);
-	ERR_FAIL_COND(mesh->surfaces[p_surface]->index_buffer.is_null());
+	Mesh::Surface &s = *mesh->surfaces[p_surface];
+	ERR_FAIL_COND(s.index_buffer.is_null());
 
 	uint64_t data_size = p_data.size();
 	const uint8_t *r = p_data.ptr();
 
-	RD::get_singleton()->buffer_update(mesh->surfaces[p_surface]->index_buffer, p_offset, data_size, r);
+	if (!s.index_data_cache.is_empty() && p_offset >= 0 && uint64_t(p_offset) < uint64_t(s.index_data_cache.size())) {
+		const uint64_t copy_bytes = MIN(data_size, uint64_t(s.index_data_cache.size()) - uint64_t(p_offset));
+		memcpy(s.index_data_cache.ptrw() + p_offset, r, copy_bytes);
+	}
+
+	RD::get_singleton()->buffer_update(s.index_buffer, p_offset, data_size, r);
 }
 
 void MeshStorage::mesh_surface_set_material(RID p_mesh, int p_surface, RID p_material) {
@@ -644,35 +687,40 @@ RenderingServerTypes::SurfaceData MeshStorage::mesh_get_surface(RID p_mesh, int 
 	ERR_FAIL_UNSIGNED_INDEX_V((uint32_t)p_surface, mesh->surface_count, RenderingServerTypes::SurfaceData());
 
 	Mesh::Surface &s = *mesh->surfaces[p_surface];
+	const bool async_gpu = RD::get_singleton()->get_driver_trait(RDD::API_TRAIT_ASYNC_GPU_COMPLETION) != 0;
 
 	RenderingServerTypes::SurfaceData sd;
 	sd.format = s.format;
 	if (s.vertex_buffer.is_valid()) {
-		sd.vertex_data = RD::get_singleton()->buffer_get_data(s.vertex_buffer);
-		// When using an uncompressed buffer with normals, but without tangents, we have to trim the padding.
-		if (!(s.format & RSE::ARRAY_FLAG_COMPRESS_ATTRIBUTES) && (s.format & RSE::ARRAY_FORMAT_NORMAL) && !(s.format & RSE::ARRAY_FORMAT_TANGENT)) {
-			sd.vertex_data.resize(sd.vertex_data.size() - sizeof(uint16_t) * 2);
+		if (async_gpu) {
+			sd.vertex_data = s.vertex_data_cache;
+		} else {
+			sd.vertex_data = RD::get_singleton()->buffer_get_data(s.vertex_buffer);
+			// When using an uncompressed buffer with normals, but without tangents, we have to trim the padding.
+			if (!(s.format & RSE::ARRAY_FLAG_COMPRESS_ATTRIBUTES) && (s.format & RSE::ARRAY_FORMAT_NORMAL) && !(s.format & RSE::ARRAY_FORMAT_TANGENT)) {
+				sd.vertex_data.resize(sd.vertex_data.size() - sizeof(uint16_t) * 2);
+			}
 		}
 	}
 	if (s.attribute_buffer.is_valid()) {
-		sd.attribute_data = RD::get_singleton()->buffer_get_data(s.attribute_buffer);
+		sd.attribute_data = async_gpu ? s.attribute_data_cache : RD::get_singleton()->buffer_get_data(s.attribute_buffer);
 	}
 	if (s.skin_buffer.is_valid()) {
-		sd.skin_data = RD::get_singleton()->buffer_get_data(s.skin_buffer);
+		sd.skin_data = async_gpu ? s.skin_data_cache : RD::get_singleton()->buffer_get_data(s.skin_buffer);
 	}
 	sd.vertex_count = s.vertex_count;
 	sd.index_count = s.index_count;
 	sd.primitive = s.primitive;
 
 	if (sd.index_count) {
-		sd.index_data = RD::get_singleton()->buffer_get_data(s.index_buffer);
+		sd.index_data = async_gpu ? s.index_data_cache : RD::get_singleton()->buffer_get_data(s.index_buffer);
 	}
 	sd.aabb = s.aabb;
 	sd.uv_scale = s.uv_scale;
 	for (uint32_t i = 0; i < s.lod_count; i++) {
 		RenderingServerTypes::SurfaceData::LOD lod;
 		lod.edge_length = s.lods[i].edge_length;
-		lod.index_data = RD::get_singleton()->buffer_get_data(s.lods[i].index_buffer);
+		lod.index_data = async_gpu ? s.lods[i].index_data_cache : RD::get_singleton()->buffer_get_data(s.lods[i].index_buffer);
 		sd.lods.push_back(lod);
 	}
 
@@ -680,7 +728,7 @@ RenderingServerTypes::SurfaceData MeshStorage::mesh_get_surface(RID p_mesh, int 
 	sd.mesh_to_skeleton_xform = s.mesh_to_skeleton_xform;
 
 	if (s.blend_shape_buffer.is_valid()) {
-		sd.blend_shape_data = RD::get_singleton()->buffer_get_data(s.blend_shape_buffer);
+		sd.blend_shape_data = async_gpu ? s.blend_shape_data_cache : RD::get_singleton()->buffer_get_data(s.blend_shape_buffer);
 	}
 
 	return sd;
@@ -2125,6 +2173,9 @@ void MeshStorage::_multimesh_set_buffer(RID p_multimesh, const Vector<float> &p_
 	}
 
 	{
+		if (RD::get_singleton()->get_driver_trait(RDD::API_TRAIT_ASYNC_GPU_COMPLETION) && multimesh->data_cache.is_empty()) {
+			_multimesh_make_local(multimesh);
+		}
 		const float *r = p_buffer.ptr();
 		RD::get_singleton()->buffer_update(multimesh->buffer, multimesh->motion_vectors_current_offset * multimesh->stride_cache * sizeof(float), p_buffer.size() * sizeof(float), r);
 		if (multimesh->motion_vectors_enabled && !used_motion_vectors) {

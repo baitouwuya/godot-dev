@@ -121,10 +121,18 @@ private:
 				RID index_buffer;
 				uint32_t index_buffer_size = 0;
 				RID index_array;
+				Vector<uint8_t> index_data_cache;
 			};
 
 			LOD *lods = nullptr;
 			uint32_t lod_count = 0;
+
+			// Retained on API_TRAIT_ASYNC_GPU_COMPLETION drivers (e.g. WebGPU) where synchronous buffer_get_data() is unavailable.
+			Vector<uint8_t> vertex_data_cache;
+			Vector<uint8_t> attribute_data_cache;
+			Vector<uint8_t> skin_data_cache;
+			Vector<uint8_t> index_data_cache;
+			Vector<uint8_t> blend_shape_data_cache;
 
 			AABB aabb;
 

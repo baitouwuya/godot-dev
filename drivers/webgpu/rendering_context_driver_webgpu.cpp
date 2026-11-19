@@ -7,13 +7,8 @@
 
 static_assert(!std::is_abstract_v<RenderingDeviceDriverWebGPU>);
 
-EM_JS(int, godot_webgpu_has_bootstrap_device, (), {
-	return !!Module['preinitializedWebGPUDevice'];
-});
-
-EM_JS(int, godot_webgpu_has_texture_formats_tier2, (), {
-	return Module['preinitializedWebGPUDevice']['features']['has']('texture-formats-tier2');
-});
+extern "C" int godot_webgpu_has_bootstrap_device();
+extern "C" int godot_webgpu_has_texture_formats_tier2();
 
 namespace godot::webgpu {
 

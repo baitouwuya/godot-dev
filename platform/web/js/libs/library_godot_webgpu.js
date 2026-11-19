@@ -29,9 +29,23 @@
 /**************************************************************************/
 
 const GodotWebGPU = {
+	godot_webgpu_has_bootstrap_device__proxy: 'sync',
+	godot_webgpu_has_bootstrap_device__sig: 'i',
+	godot_webgpu_has_bootstrap_device: function () {
+		return Module['preinitializedWebGPUDevice'] ? 1 : 0;
+	},
+
+	godot_webgpu_has_texture_formats_tier2__proxy: 'sync',
+	godot_webgpu_has_texture_formats_tier2__sig: 'i',
+	godot_webgpu_has_texture_formats_tier2: function () {
+		const device = Module['preinitializedWebGPUDevice'];
+		return device && device['features'] && device['features']['has']('texture-formats-tier2') ? 1 : 0;
+	},
+
 	// emdawnwebgpu v20250531 omits WGPUTextureViewDescriptor.usage in wgpuTextureCreateView,
 	// preventing narrowed sRGB sampling/attachment views on StorageBinding textures.
 	godot_webgpu_texture_create_view__deps: ['$WebGPU', 'emwgpuCreateTextureView'],
+	godot_webgpu_texture_create_view__proxy: 'sync',
 	godot_webgpu_texture_create_view__sig: 'ppiiiiiiii',
 	godot_webgpu_texture_create_view: function (texturePtr, format, dimension, baseMipLevel, mipLevelCount, baseArrayLayer, arrayLayerCount, aspect, usage) {
 		const mipCount = mipLevelCount >>> 0;
