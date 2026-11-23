@@ -1,76 +1,50 @@
-# Godot Engine
+# godot-dev
 
-<p align="center">
-  <a href="https://godotengine.org">
-    <img src="misc/logo/logo_outlined.svg" width="400" alt="Godot Engine logo">
-  </a>
-</p>
+**English** | [简体中文](README.zh-CN.md)
 
-## 2D and 3D cross-platform game engine
+Custom [Godot Engine](https://godotengine.org) development fork adding an embedded **MCP Host/CLI** and a **WebGPU RenderingDevice backend with HTTP Range asset streaming**.
 
-**[Godot Engine](https://godotengine.org) is a feature-packed, cross-platform
-game engine to create 2D and 3D games from a unified interface.** It provides a
-comprehensive set of [common tools](https://godotengine.org/features), so that
-users can focus on making games without having to reinvent the wheel. Games can
-be exported with one click to a number of platforms, including the major desktop
-platforms (Linux, macOS, Windows), mobile platforms (Android, iOS), as well as
-Web-based platforms and [consoles](https://godotengine.org/consoles).
+For upstream engine overview, tutorials, and general compilation guides, see the [official Godot documentation](https://docs.godotengine.org) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Free, open source and community-driven
+## Versions & Build Baseline
 
-Godot is completely free and open source under the very permissive [MIT license](https://godotengine.org/license).
-No strings attached, no royalties, nothing. The users' games are theirs, down
-to the last line of engine code. Godot's development is fully independent and
-community-driven, empowering users to help shape their engine to match their
-expectations. It is supported by the [Godot Foundation](https://godot.foundation/)
-not-for-profit.
+| Component | Version / Baseline | Notes |
+| --- | --- | --- |
+| **Upstream Godot** | `4.7.3-rc` | Merged from `upstream/4.7` (`fde53e7e59`) |
+| **Embedded MCP** | Protocol `2025-11-25` (compat `2025-06-18`, `2025-03-26`) · Discovery ext `io.godot/tool-discovery v1` | Server reports `VERSION_FULL_CONFIG`; SCons `mcp=auto\|yes\|no` (excluded from `template_release`) |
+| **WebGPU Backend** | Emscripten `>= 4.0.11` (`--use-port=emdawnwebgpu`, verified on `4.0.11`) | SCons `webgpu=yes`, `webgpu_precompile_shaders=yes`, `dlink_enabled=yes\|no` |
+| **WGSL / SPIR-V Toolchain** | SPIRV-Tools `v2026.2` (`3605cce5`) · Dawn Tint (`main` + 6 vendored patches) | Embedded in `drivers/webgpu/` + `thirdparty/{tint,spirv-tools,spirv-headers}` |
 
-Before being open sourced in [February 2014](https://github.com/godotengine/godot/commit/0b806ee0fc9097fa7bda7ac0109191c9c5e0a1ac),
-Godot had been developed by [Juan Linietsky](https://github.com/reduz) and
-[Ariel Manzur](https://github.com/punto-) for several years as an in-house
-engine, used to publish several work-for-hire titles.
+## Custom Modules
 
-![Screenshot of a 3D scene in the Godot Engine editor](https://raw.githubusercontent.com/godotengine/godot-design/master/screenshots/editor_tps_demo_1920x1080.jpg)
+### 1. Embedded MCP Host & CLI (`core/mcp/`, `editor/mcp/`, `main/mcp_cli*`)
+- Opt-in persistent editor MCP Host (`--editor --mcp`) with project-lease ownership and safe lifecycle recovery.
+- Headless terminal adapters (`--mcp-discover`, `--mcp-stdio`) with bearer-authenticated loopback forwarding.
+- 111+ structured editor, scene, project, GDScript LSP analysis, and runtime debugger tools with `outputSchema` and safety annotations.
+- Session-negotiated compact progressive tool discovery (`godot.catalog.search`, `godot.catalog.describe`).
 
-## Getting the engine
+**Documentation (Progressive Disclosure):**
+- Start here: [MCP Usage & CLI Guide](editor/mcp/README.md)
+- Deep dives: [Architecture](editor/mcp/ARCHITECTURE.md) · [Progressive Disclosure](editor/mcp/PROGRESSIVE_DISCLOSURE.md) · [Contributing](editor/mcp/CONTRIBUTING.md) · [GDExtension Build Plan](editor/mcp/GDEXTENSION_BUILD_PLAN.md)
 
-### Binary downloads
+### 2. WebGPU Rendering Backend & Web Streaming (`drivers/webgpu/`, `platform/web/`)
+- Native `RenderingDevice` WebGPU driver supporting **Forward+** and **Mobile** renderers on Web with automatic 3-tier fallback (`WebGPU Forward+ → WebGPU Mobile → WebGL2`).
+- Embedded SPIR-V → Tint WGSL compilation plus optional host-side build-time shader precompilation (`webgpu_precompile_shaders=yes`).
+- GDExtension dynamic linking (`dlink_enabled=yes`) support on WebGPU exports.
+- HTTP `206` Range `.pck` streaming (zero `MEMFS` duplication), progressive `.ctex`/`.dds` mip-tail streaming, multi-phase HTML5 startup progress shell, and threaded RFC 7233 dev server (`platform/web/serve.py`).
 
-Official binaries for the Godot editor and the export templates can be found
-[on the Godot website](https://godotengine.org/download).
+**Documentation (Progressive Disclosure):**
+- Start here: [WebGPU Backend & Streaming Guide](drivers/webgpu/README.md)
+- Deep dive: [Vendored Tint Patches](thirdparty/tint/patches/README.md)
 
-### Compiling from source
+## Quick Build Reference
 
-[See the official docs](https://docs.godotengine.org/en/latest/engine_details/development/compiling)
-for compilation instructions for every supported platform.
+```bash
+# Desktop Editor (with embedded MCP enabled by default via mcp=auto)
+scons platform=windows target=editor
 
-## Community and contributing
+# WebGPU Release Export Template (with precompiled engine shaders)
+scons platform=web target=template_release threads=no webgpu=yes webgpu_precompile_shaders=yes optimize=speed
+```
 
-Godot is not only an engine but an ever-growing community of users and engine
-developers. The main community channels are listed [on the homepage](https://godotengine.org/community).
-
-The best way to get in touch with the core engine developers is to join the
-[Godot Contributors Chat](https://chat.godotengine.org).
-
-To get started contributing to the project, see the [contributing guide](CONTRIBUTING.md).
-This document also includes guidelines for reporting bugs.
-
-## Documentation and demos
-
-The official documentation is hosted on [Read the Docs](https://docs.godotengine.org).
-It is maintained by the Godot community in its own [GitHub repository](https://github.com/godotengine/godot-docs).
-
-The [class reference](https://docs.godotengine.org/en/latest/classes/)
-is also accessible from the Godot editor.
-
-We also maintain official demos in their own [GitHub repository](https://github.com/godotengine/godot-demo-projects)
-as well as a list of [awesome Godot community resources](https://github.com/godotengine/awesome-godot).
-
-There are also a number of other
-[learning resources](https://docs.godotengine.org/en/latest/community/tutorials.html)
-provided by the community, such as text and video tutorials, demos, etc.
-Consult the [community channels](https://godotengine.org/community)
-for more information.
-
-[![Code Triagers Badge](https://www.codetriage.com/godotengine/godot/badges/users.svg)](https://www.codetriage.com/godotengine/godot)
-[![Translate on Weblate](https://hosted.weblate.org/widgets/godot-engine/-/godot/svg-badge.svg)](https://hosted.weblate.org/engage/godot-engine/?utm_source=widget)
+See the linked module documentation above for full build matrices, CLI options, runtime flags, and test suites.
