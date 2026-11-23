@@ -1,4 +1,5 @@
 #include "webgpu_shader_resources.h"
+#include "webgpu_perf_stats.h"
 
 #include "core/object/worker_thread_pool.h"
 
@@ -82,12 +83,15 @@ RDD::ShaderID RenderingDeviceDriverWebGPU::shader_create_from_container(const Re
 			shader->immutable[{ *found_set, sampler.binding, i, Role::SAMPLER }] = resource<SamplerResource>(sampler.ids[i]);
 		}
 	}
+	// On the calling thread, wait for first use so the real constants and bound view formats are known.
+#ifdef THREADS_ENABLED
 	if (shader_class.ends_with("ShaderRD")) {
 		// ShaderRD can call here from its GLSL worker group. This separate CPU
 		// job must not access driver state or wait on browser callbacks.
 		shader->prepare_task = WorkerThreadPool::get_singleton()->add_native_task(PrepareJob::run,
 				new PrepareJob{ shader->source, variant_options(*shader, {}, shader->options) }, true, "Prepare WebGPU shader");
 	}
+#endif // THREADS_ENABLED
 	return resource_id<ShaderID>(std::move(shader));
 }
 
@@ -114,10 +118,18 @@ std::shared_ptr<ShaderVariant> RenderingDeviceDriverWebGPU::realize_shader(const
 	if (auto it = p_shader->variants.find(key); it != p_shader->variants.end()) {
 		return it->second;
 	}
-	auto variant = std::make_shared<ShaderVariant>();
-	variant->prepared = p_shader->source->prepare(key.options);
-	const ShaderPlan &plan = variant->prepared->plan;
+#ifdef WEB_ENABLED
+	const bool perf_active = webgpu_perf_is_enabled() && webgpu_perf_stats.in_raf;
+	const double perf_start_ms = perf_active ? emscripten_get_now() : 0.0;
+#endif
+	auto prepared = p_shader->source->prepare(key.options);
+	const ShaderPlan &plan = prepared->plan;
 	ERR_FAIL_COND_V_MSG(!plan.ok(), {}, String::utf8(plan.diagnostic.c_str()));
+	if (auto it = p_shader->variants.find(prepared->key); it != p_shader->variants.end()) {
+		return p_shader->variants.try_emplace(key, it->second).first->second;
+	}
+	auto variant = std::make_shared<ShaderVariant>();
+	variant->prepared = std::move(prepared);
 	variant->immutable = p_shader->immutable;
 	for (uint32_t s = 0; s < p_shader->reflection.uniform_sets.size(); ++s) {
 		for (const auto &uniform : p_shader->reflection.uniform_sets[s]) {
@@ -140,7 +152,14 @@ std::shared_ptr<ShaderVariant> RenderingDeviceDriverWebGPU::realize_shader(const
 		module.reset(wgpuDeviceCreateShaderModule(state->device.get(), &desc));
 		ERR_FAIL_COND_V(!module, {});
 	}
-	p_shader->variants.emplace(key, variant);
+#ifdef WEB_ENABLED
+	if (perf_active) {
+		webgpu_perf_stats.frame.work.shader_module_calls++;
+		webgpu_perf_stats.frame.work.shader_module_ms += emscripten_get_now() - perf_start_ms;
+	}
+#endif
+	p_shader->variants.try_emplace(variant->prepared->key, variant);
+	p_shader->variants.try_emplace(key, variant);
 	return variant;
 }
 

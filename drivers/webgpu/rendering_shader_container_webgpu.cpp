@@ -15,9 +15,17 @@ using namespace godot::webgpu;
 namespace godot::webgpu {
 namespace {
 
-auto key_fields(const CompileOptions &p) {
-	return std::tie(p.specialization, p.raw_depth, p.unfilterable_float, p.storage_formats, p.atomic_images, p.immutable_samplers,
+auto exact_fields(const CompileOptions &p) {
+	return std::tie(p.specialization, p.raw_depth, p.unfilterable_float, p.atomic_images, p.immutable_samplers,
 			p.uniform_memory_fences, p.texture_barrier, p.promote_narrow_storage, p.non_uniform_derivatives, p.flip_vertex_y, p.subgroup_lowering);
+}
+
+bool contains_storage_formats(const CompileOptions &p_requested, const CompileOptions &p_compiled) {
+	// lower_images() only uses storage_formats for formatless storage images, and fails
+	// if a needed format is missing. With identical SPIR-V and other options, a successful
+	// plan can therefore accept extra entries, but not a changed or missing supplied format.
+	return std::includes(p_requested.storage_formats.begin(), p_requested.storage_formats.end(),
+			p_compiled.storage_formats.begin(), p_compiled.storage_formats.end());
 }
 
 using Common = RenderingDeviceCommons;
@@ -47,7 +55,9 @@ CompileKey::CompileKey(CompileOptions p_options) : options(std::move(p_options))
 }
 
 bool CompileKey::operator<(const CompileKey &p_other) const {
-	return key_fields(options) < key_fields(p_other.options);
+	const auto left = exact_fields(options);
+	const auto right = exact_fields(p_other.options);
+	return std::tie(left, options.storage_formats) < std::tie(right, p_other.options.storage_formats);
 }
 
 } // namespace godot::webgpu
@@ -87,6 +97,16 @@ std::shared_ptr<const PreparedShader> RenderingShaderContainerWebGPU::prepare(co
 		if (const auto cached = prepared.find(key); cached != prepared.end()) {
 			return cached->second;
 		}
+		if (!key.options.storage_formats.empty() && !prepared.empty()) {
+			CompileKey first = key;
+			first.options.storage_formats.clear();
+			for (auto it = prepared.lower_bound(first);
+					it != prepared.end() && exact_fields(it->first.options) == exact_fields(key.options); ++it) {
+				if (it->second->plan.ok() && contains_storage_formats(key.options, it->first.options)) {
+					return it->second;
+				}
+			}
+		}
 	}
 	std::vector<StageInput> stages;
 	ShaderPlan result;
@@ -122,10 +142,10 @@ std::shared_ptr<const PreparedShader> RenderingShaderContainerWebGPU::prepare(co
 				continue;
 			}
 			const CompileKey compiled(entry.options());
-			if (!(key < compiled) && !(compiled < key)) {
-				seed_verified_plan(key.options, entry.plan());
+			if (exact_fields(key.options) == exact_fields(compiled.options) && contains_storage_formats(key.options, compiled.options)) {
+				seed_verified_plan(compiled.options, entry.plan());
 				std::lock_guard<std::mutex> lock(prepared_mutex);
-				return prepared.find(key)->second;
+				return prepared.find(compiled)->second;
 			}
 		}
 #endif

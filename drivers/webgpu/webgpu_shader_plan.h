@@ -4,6 +4,7 @@
 
 #include <array>
 #include <map>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -83,12 +84,13 @@ struct StageOutput {
 	Stage stage;
 	std::string entry_point;
 	std::string wgsl;
+	std::vector<uint32_t> override_ids = {}; // Explicit WGSL IDs used by this entry point.
 };
 
 struct CompileOptions {
-	// Exact 32-bit specialization payloads, indexed by SPIR-V SpecId. All supplied
-	// values apply before freezing/layout reflection; absent values use the module defaults.
-	std::map<uint32_t, uint32_t> specialization;
+	// Keyed by SPIR-V SpecId. An absent entry freezes the SPIR-V default;
+	// an entry without bits requests a pipeline override instead of freezing.
+	std::map<uint32_t, std::optional<uint32_t>> specialization;
 	// Bindings declared as ordinary f32 in GLSL but backed by a depth-only view.
 	std::vector<BindingKey> raw_depth;
 	std::vector<BindingKey> unfilterable_float;

@@ -1,4 +1,5 @@
 #include "webgpu_shader_resources.h"
+#include "webgpu_perf_stats.h"
 
 #include <algorithm>
 #include <atomic>
@@ -315,6 +316,7 @@ Error RenderingDeviceDriverWebGPU::get_bind_group(ShaderVariant &r_shader, uint3
 	auto &key = r_scratch.key;
 	key.clear();
 	const bool share_recipe = !plan.uses_push && plan.logical_sets.size() <= 1;
+	const bool retain_push_groups = plan.uses_push && plan.logical_sets.empty();
 	LogicalUniformSet *set = nullptr;
 	bool cacheable = true;
 	for (uint32_t index : plan.logical_sets) {
@@ -325,6 +327,14 @@ Error RenderingDeviceDriverWebGPU::get_bind_group(ShaderVariant &r_shader, uint3
 		if (!share_recipe) {
 			key.push_back(set->uid);
 		}
+	}
+	const bool retain_set_groups = cacheable && plan.uses_push && !plan.logical_sets.empty();
+	std::shared_ptr<BindGroupRecipe> retention_recipe;
+	if (retain_push_groups && !plan.recipe) {
+		// plan.groups remains the keyed lookup table and weak map. The recipe's existing
+		// strong UseList is used only as a lifetime anchor for push-only groups, whose
+		// resources are persistent push-page buffers and have no logical-set invalidation.
+		plan.recipe = std::make_shared<BindGroupRecipe>();
 	}
 	if (plan.uses_push) {
 		ERR_FAIL_NULL_V_MSG(p_push, ERR_INVALID_DATA, vformat("Missing push constants for WebGPU group %d.", p_group));
@@ -490,10 +500,22 @@ Error RenderingDeviceDriverWebGPU::get_bind_group(ShaderVariant &r_shader, uint3
 	desc.entries = entries.data();
 	group->handle.reset(wgpuDeviceCreateBindGroup(state->device.get(), &desc));
 	ERR_FAIL_COND_V(!group->handle, ERR_CANT_CREATE);
+	if (webgpu_perf_is_enabled() && webgpu_perf_stats.in_raf) {
+		webgpu_perf_stats.frame.work.bind_group_creates++;
+	}
 	if (slot) {
 		*slot = group;
 	} else if (cacheable) {
 		plan.groups.insert_or_assign(key, group);
+	}
+	if (retain_push_groups) {
+		plan.recipe->immutable.push_back(group);
+	} else if (retain_set_groups) {
+		// Folded push groups also depend on logical sets. Retain them from the set
+		// lifetime rather than from the shader plan, so freeing the set invalidates
+		// the group without a global shader-variant sweep.
+		retention_recipe = std::make_shared<BindGroupRecipe>();
+		set->bind_groups[retention_recipe] = group;
 	}
 	r_group = std::move(group);
 	return OK;

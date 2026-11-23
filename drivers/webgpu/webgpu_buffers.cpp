@@ -1,4 +1,5 @@
 #include "rendering_device_driver_webgpu.h"
+#include "webgpu_perf_stats.h"
 
 #include <algorithm>
 #include <cstring>
@@ -7,6 +8,14 @@ using namespace godot::webgpu;
 
 namespace godot::webgpu {
 namespace {
+
+void count_buffer_write(uint64_t p_bytes) {
+	if (webgpu_perf_stats.in_raf && webgpu_perf_is_enabled()) {
+		auto &work = webgpu_perf_stats.frame.work;
+		work.write_buffer_calls++;
+		work.write_buffer_bytes += p_bytes;
+	}
+}
 
 WGPUBufferUsage resolve_usage(BitField<RDD::BufferUsageBits> p_usage) {
 	WGPUBufferUsage usage = WGPUBufferUsage_None;
@@ -110,6 +119,9 @@ RDD::BufferID RenderingDeviceDriverWebGPU::create_buffer(uint64_t p_size, BitFie
 	desc.mappedAtCreation = !p_initial_data.is_empty();
 	buf->buffer.reset(wgpuDeviceCreateBuffer(state->device.get(), &desc));
 	ERR_FAIL_COND_V(!buf->buffer, {});
+	if (webgpu_perf_stats.in_raf && webgpu_perf_is_enabled()) {
+		webgpu_perf_stats.frame.work.buffer_creates++;
+	}
 	if (desc.mappedAtCreation) {
 		void *mapped = wgpuBufferGetMappedRange(buf->buffer.get(), 0, desc.size);
 		ERR_FAIL_NULL_V(mapped, {});
@@ -211,8 +223,17 @@ void RenderingDeviceDriverWebGPU::buffer_flush(BufferID p_buffer) {
 	state->assert_owner();
 	const auto &buf = *resource<BufferResource>(p_buffer);
 	DEV_ASSERT(buf.access == BufferAccess::DYNAMIC);
-	const uint64_t offset = buf.offset(buf.frame);
-	wgpuQueueWriteBuffer(state->queue.get(), buf.buffer.get(), offset, buf.upload.data() + offset, align_up(buf.size, BUFFER_COPY_ALIGNMENT));
+	const uint64_t slice_offset = buf.offset(buf.frame);
+	const RenderingDeviceDriver::BufferFlushRange &range = RenderingDeviceDriver::get_active_buffer_flush_range();
+	if (range.size == 0) {
+		return;
+	}
+	const uint64_t first = range.size == BUFFER_WHOLE_SIZE ? 0 : range.offset & ~(uint64_t(BUFFER_COPY_ALIGNMENT) - 1);
+	const uint64_t end = range.size == BUFFER_WHOLE_SIZE ? align_up(buf.size, BUFFER_COPY_ALIGNMENT) : align_up(range.offset + range.size, BUFFER_COPY_ALIGNMENT);
+	DEV_ASSERT(first <= end && end <= buf.allocation_size - slice_offset);
+	const uint64_t bytes = end - first;
+	wgpuQueueWriteBuffer(state->queue.get(), buf.buffer.get(), slice_offset + first, buf.upload.data() + slice_offset + first, bytes);
+	count_buffer_write(bytes);
 }
 
 Error RenderingDeviceDriverWebGPU::prepare_upload_for_copy(BufferID p_buffer, uint64_t p_offset, uint64_t p_size) {
@@ -224,6 +245,8 @@ Error RenderingDeviceDriverWebGPU::prepare_upload_for_copy(BufferID p_buffer, ui
 	DEV_ASSERT(p_offset <= buf.size && p_size <= buf.size - p_offset);
 	const uint64_t first = p_offset & ~(uint64_t(BUFFER_COPY_ALIGNMENT) - 1);
 	const uint64_t end = align_up(p_offset + p_size, BUFFER_COPY_ALIGNMENT);
-	wgpuQueueWriteBuffer(state->queue.get(), buf.buffer.get(), first, buf.upload.data() + first, end - first);
+	const uint64_t bytes = end - first;
+	wgpuQueueWriteBuffer(state->queue.get(), buf.buffer.get(), first, buf.upload.data() + first, bytes);
+	count_buffer_write(bytes);
 	return OK;
 }

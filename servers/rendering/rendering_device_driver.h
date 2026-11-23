@@ -184,6 +184,15 @@ public:
 		BUFFER_WHOLE_SIZE = ~0ULL
 	};
 
+	struct BufferFlushRange {
+		uint64_t offset = 0;
+		uint64_t size = BUFFER_WHOLE_SIZE;
+	};
+	static BufferFlushRange &get_active_buffer_flush_range() {
+		static thread_local BufferFlushRange range;
+		return range;
+	}
+
 	/** Allocates a new GPU buffer. Must be destroyed with buffer_free().
 	 * @param p_size The size in bytes of the buffer.
 	 * @param p_usage Usage flags.
@@ -201,6 +210,13 @@ public:
 	virtual uint8_t *buffer_persistent_map_advance(BufferID p_buffer, uint64_t p_frames_drawn) = 0;
 	virtual uint64_t buffer_get_dynamic_offsets(Span<BufferID> p_buffers) = 0;
 	virtual void buffer_flush(BufferID p_buffer) {}
+	void buffer_flush_range(BufferID p_buffer, uint64_t p_offset, uint64_t p_size) {
+		BufferFlushRange &active = get_active_buffer_flush_range();
+		const BufferFlushRange previous = active;
+		active = { p_offset, p_size };
+		buffer_flush(p_buffer);
+		active = previous;
+	}
 	// Only for a buffer with BUFFER_USAGE_DEVICE_ADDRESS_BIT.
 	virtual uint64_t buffer_get_device_address(BufferID p_buffer) = 0;
 

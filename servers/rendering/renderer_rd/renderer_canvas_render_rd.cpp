@@ -925,7 +925,7 @@ void RendererCanvasRenderRD::canvas_render_items(RID p_to_render_target, Item *p
 	if (state.instance_data_index > 0) {
 		// If there was any remaining instance data, it must be flushed.
 		RID buf = state.instance_buffers._get(0);
-		RD::get_singleton()->buffer_flush(buf);
+		RD::get_singleton()->buffer_flush_range(buf, 0, uint64_t(state.instance_data_index) * sizeof(InstanceData));
 		state.instance_data_index = 0;
 	}
 }
@@ -3296,7 +3296,7 @@ void RendererCanvasRenderRD::_add_to_batch(bool &r_batch_broken, Batch *&r_curre
 	memcpy(&state.instance_data[state.instance_data_index], &state.intermediary_instance_data, sizeof(InstanceData));
 	state.instance_data_index++;
 	if (state.instance_data_index >= state.max_instances_per_buffer) {
-		RD::get_singleton()->buffer_flush(r_current_batch->instance_buffer);
+		RD::get_singleton()->buffer_flush_range(r_current_batch->instance_buffer, 0, state.max_instance_buffer_size);
 		state.instance_data = nullptr;
 		_allocate_instance_buffer();
 		state.instance_data_index = 0;

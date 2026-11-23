@@ -43,6 +43,7 @@
 #include "core/profiling/profiling.h"
 #include "drivers/unix/dir_access_unix.h"
 #include "drivers/unix/file_access_unix.h"
+#include "drivers/webgpu/webgpu_perf_stats.h"
 #include "main/main.h"
 
 #ifdef RD_ENABLED
@@ -51,6 +52,32 @@
 
 #include <dlfcn.h>
 #include <emscripten.h>
+
+using namespace godot::webgpu;
+
+#ifdef WEBGPU_ENABLED
+EM_JS_DEPS(godot_webgpu_perf_raf, "$registerPreMainLoop,$registerPostMainLoop,$getWasmTableEntry");
+
+void godot::webgpu::webgpu_perf_install_raf_hooks() {
+	if (webgpu_perf_stats.armed) {
+		return;
+	}
+	// Bracket the actual Emscripten loop callback, including web_main's early FPS-cap return.
+	const auto begin = +[]() { webgpu_perf_on_raf_begin(emscripten_get_now()); };
+	const auto end = +[]() {
+		// Device acquisition can install the post hook halfway through the startup tick.
+		if (webgpu_perf_stats.in_raf) {
+			webgpu_perf_on_raf_end(emscripten_get_now());
+		}
+	};
+	EM_ASM({
+		registerPreMainLoop(getWasmTableEntry($0));
+		registerPostMainLoop(getWasmTableEntry($1));
+	}, begin, end);
+	webgpu_perf_stats.window_start_ms = emscripten_get_now();
+	webgpu_perf_stats.armed = true;
+}
+#endif
 
 void OS_Web::alert(const String &p_alert, const String &p_title) {
 	godot_js_display_alert(p_alert.utf8().get_data());
@@ -81,6 +108,30 @@ void OS_Web::fs_sync_callback() {
 	get_singleton()->idb_is_syncing = false;
 }
 
+template <bool p_measure>
+static bool iterate_and_poll_upgrades() {
+	double start_ms;
+	if constexpr (p_measure) {
+		webgpu_perf_stats.frame.admitted = true;
+		start_ms = emscripten_get_now();
+	}
+	const bool quit = Main::iteration();
+	if constexpr (p_measure) {
+		webgpu_perf_stats.frame.iter_ms = emscripten_get_now() - start_ms;
+	}
+	if (!quit) {
+		// Also service idle iterations: completing an upgrade can request its own redraw.
+		if constexpr (p_measure) {
+			start_ms = emscripten_get_now();
+		}
+		WebPackStream::poll_upgrades(2500);
+		if constexpr (p_measure) {
+			webgpu_perf_stats.frame.pack_upgrade_ms = emscripten_get_now() - start_ms;
+		}
+	}
+	return quit;
+}
+
 bool OS_Web::main_loop_iterate() {
 	GodotProfileFrameMark;
 	GodotProfileZone("OS_Web::main_loop_iterate");
@@ -96,6 +147,12 @@ bool OS_Web::main_loop_iterate() {
 	if (RenderingDevice *rd = RenderingDevice::get_singleton()) {
 		const Error status = rd->poll_next_frame();
 		if (status == ERR_BUSY) {
+#ifdef WEBGPU_ENABLED
+			if (webgpu_perf_stats.in_raf) {
+				webgpu_perf_stats.frame.busy_serial = webgpu_perf_stats.last_busy == WebGPUPerfBusy::SERIAL;
+				webgpu_perf_stats.frame.busy_map = webgpu_perf_stats.last_busy == WebGPUPerfBusy::MAP;
+			}
+#endif
 			return false; // Return to JS so queue and MapAsync callbacks can run.
 		}
 		if (status != OK) {
@@ -104,12 +161,12 @@ bool OS_Web::main_loop_iterate() {
 		}
 	}
 #endif
-	const bool quit = Main::iteration();
-	if (!quit) {
-		// Also service idle iterations: completing an upgrade can request its own redraw.
-		WebPackStream::poll_upgrades(2500);
+#ifdef WEBGPU_ENABLED
+	if (webgpu_perf_stats.in_raf) {
+		return iterate_and_poll_upgrades<true>();
 	}
-	return quit;
+#endif
+	return iterate_and_poll_upgrades<false>();
 }
 
 void OS_Web::delete_main_loop() {

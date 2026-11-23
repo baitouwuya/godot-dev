@@ -83,6 +83,15 @@ def builtin_jobs():
     def default():
         return {"default": ()}
 
+    def add_profiles(path, variants, profiles):
+        for suffix, options in profiles:
+            add(path, {name + suffix: flags for name, flags in variants.items()}, options=options)
+
+    # Scene depth is a depth attachment or (with a compute resolve) R32F.
+    # R32F is filterable only on adapters with Float32Filterable enabled.
+    depth_view = {"raw_depth": [key(0)]}
+    depth_profiles = (("", depth_view), ("_float", {}), ("_unfilterable", {"unfilterable_float": [key(0)]}))
+
     scene = ("MAX_ROUGHNESS_LOD 7.0", "USE_RADIANCE_OCTMAP_ARRAY", "MAX_DIRECTIONAL_LIGHT_DATA_STRUCTS 8",
              "MAX_LIGHTMAP_TEXTURES 8", "MAX_LIGHTMAPS 8", "MATERIAL_UNIFORM_SET 3")
     mobile = {"color": (), "lightmaps": ("USE_LIGHTMAP",), "shadow": ("MODE_RENDER_DEPTH", "SHADOW_PASS"),
@@ -90,6 +99,7 @@ def builtin_jobs():
               "depth_material": ("MODE_RENDER_DEPTH", "MODE_RENDER_MATERIAL")}
     clustered = {"color": (), "lightmaps": ("USE_LIGHTMAP",), "separate_specular": ("MODE_SEPARATE_SPECULAR",),
                  "velocity": ("MOTION_VECTORS",), "depth": ("MODE_RENDER_DEPTH",),
+                 "depth_dp": ("MODE_RENDER_DEPTH", "MODE_DUAL_PARABOLOID"),
                  "depth_normal": ("MODE_RENDER_DEPTH", "MODE_RENDER_NORMAL_ROUGHNESS"),
                  "depth_voxel_gi": ("MODE_RENDER_DEPTH", "MODE_RENDER_NORMAL_ROUGHNESS", "MODE_RENDER_VOXEL_GI")}
     with_uber = lambda variants: {**variants, **{f"uber_{name}": ("UBERSHADER", *flags) for name, flags in variants.items()}}
@@ -119,12 +129,12 @@ def builtin_jobs():
     add("effects/octmap_downsampler_raster", default())
     add("effects/octmap_filter_raster", {"high": ("USE_HIGH_QUALITY",), "low": ("USE_LOW_QUALITY",)})
     add("effects/octmap_roughness_raster", default())
-    add("effects/ss_effects_downsample", {
+    add_profiles("effects/ss_effects_downsample", {
         "depth": (), "half_size": ("USE_HALF_SIZE",), "mips": ("GENERATE_MIPS",),
         "mips_half_size": ("GENERATE_MIPS", "USE_HALF_SIZE"), "half_buffers": ("USE_HALF_BUFFERS",),
         "half_buffers_half_size": ("USE_HALF_BUFFERS", "USE_HALF_SIZE"),
         "full_mips": ("GENERATE_MIPS", "GENERATE_FULL_MIPS"),
-    }, options={"raw_depth": [key(0)]})
+    }, depth_profiles)
     add("effects/resolve", {"gi": ("MODE_RESOLVE_GI",), "voxel_gi": ("MODE_RESOLVE_GI", "VOXEL_GI_RESOLVE"),
                             "depth": ("MODE_RESOLVE_DEPTH",)}, options={"raw_depth": [key(0)]})
     add("effects/resolve_raster", default(), options={"raw_depth": [key(0)]})
@@ -132,8 +142,26 @@ def builtin_jobs():
     add("effects/luminance_reduce", {"first": ("READ_TEXTURE",), "reduce": (), "last": ("WRITE_LUMINANCE",)})
     add("effects/luminance_reduce_raster", {"first": ("FIRST_PASS",), "reduce": (), "last": ("FINAL_PASS",)})
     add("effects/ssil", {"normal": (), "base": ("SSIL_BASE",), "adaptive": ("ADAPTIVE",)})
-    for suffix in ("", "_downsample", "_hiz", "_resolve"):
-        add("effects/screen_space_reflection" + suffix, default())
+    add("effects/ssil_importance_map", {
+        "generate": ("GENERATE_MAP",), "process_a": ("PROCESS_MAPA",), "process_b": ("PROCESS_MAPB",),
+    })
+    add("effects/ssil_blur", {"non_smart": ("MODE_NON_SMART",), "smart": ("MODE_SMART",), "wide": ("MODE_WIDE",)})
+    add("effects/ssil_interleave", {"non_smart": ("MODE_NON_SMART",), "smart": ("MODE_SMART",), "half": ("MODE_HALF",)})
+
+    # The downsample and Hi-Z passes select a GLSL variant for each combination of odd input dimensions.
+    odd_sizes = {"default": (), "odd_width": ("MODE_ODD_WIDTH",), "odd_height": ("MODE_ODD_HEIGHT",),
+                 "odd_both": ("MODE_ODD_WIDTH", "MODE_ODD_HEIGHT")}
+    add_profiles("effects/screen_space_reflection_downsample", odd_sizes, depth_profiles)
+    # Hi-Z can read scene depth for mip 1, or any mip of its R32F pyramid.
+    add_profiles("effects/screen_space_reflection_hiz", odd_sizes, depth_profiles)
+    add("effects/screen_space_reflection", default())
+    add("effects/screen_space_reflection", {"unfilterable_hiz": ()}, options={"unfilterable_float": [key(1)]})
+    add_profiles("effects/screen_space_reflection_resolve", default(), (
+        ("", depth_view),
+        ("_unfilterable_hiz", {**depth_view, "unfilterable_float": [key(2)]}),
+        ("_float", {}),
+        ("_unfilterable", {"unfilterable_float": [key(0), key(2)]}),
+    ))
     # SPIR-V Rgba16f. SSR filter's formatless dest aliases the SSR rgba16f color pyramid.
     add("effects/screen_space_reflection_filter", default(), options={"storage_formats": [key(1, format=2)]})
     return jobs

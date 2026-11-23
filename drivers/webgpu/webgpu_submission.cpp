@@ -1,4 +1,5 @@
 #include "webgpu_commands.h"
+#include "webgpu_perf_stats.h"
 
 #include <algorithm>
 
@@ -36,6 +37,9 @@ Error RenderingDeviceDriverWebGPU::fence_wait(FenceID p_fence) {
 		return ERR_CANT_ACQUIRE_RESOURCE;
 	}
 	if (fence.serial > state->completed()) {
+		if (webgpu_perf_stats.in_raf) {
+			webgpu_perf_stats.last_busy = WebGPUPerfBusy::SERIAL;
+		}
 		return ERR_BUSY;
 	}
 	for (const auto &buffer : fence.downloads) {
@@ -43,6 +47,9 @@ Error RenderingDeviceDriverWebGPU::fence_wait(FenceID p_fence) {
 			return ERR_CANT_ACQUIRE_RESOURCE;
 		}
 		if (buffer->download_state != DownloadState::MAPPED) {
+			if (webgpu_perf_stats.in_raf) {
+				webgpu_perf_stats.last_busy = WebGPUPerfBusy::MAP;
+			}
 			return ERR_BUSY;
 		}
 	}
@@ -116,12 +123,21 @@ Error RenderingDeviceDriverWebGPU::command_queue_execute_and_present(CommandQueu
 	state->assert_owner();
 	std::vector<WGPUCommandBuffer> commands;
 	UseList uses;
+	const bool measure_pushes = webgpu_perf_stats.in_raf;
 	for (uint32_t i = 0; i < p_buffers.size(); ++i) {
 		auto &cmd = recording(*state, p_buffers[i]);
 		DEV_ASSERT(cmd.finished);
 		commands.push_back(cmd.finished.get());
 		for (const auto &page : cmd.push_pages) {
-			wgpuQueueWriteBuffer(state->queue.get(), page->gpu->buffer.get(), 0, page->bytes.data(), align_up(page->used, BUFFER_COPY_ALIGNMENT));
+			const uint64_t bytes = align_up(page->used, BUFFER_COPY_ALIGNMENT);
+			wgpuQueueWriteBuffer(state->queue.get(), page->gpu->buffer.get(), 0, page->bytes.data(), bytes);
+			if (measure_pushes) {
+				auto &work = webgpu_perf_stats.frame.work;
+				work.write_buffer_calls++;
+				work.write_buffer_bytes += bytes;
+				work.push_write_calls++;
+				work.push_write_bytes += bytes;
+			}
 			uses.push_back(page);
 		}
 		uses.insert(uses.end(), cmd.uses.begin(), cmd.uses.end());

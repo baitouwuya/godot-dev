@@ -1,4 +1,5 @@
 #include "webgpu_commands.h"
+#include "webgpu_perf_stats.h"
 
 using namespace godot::webgpu;
 
@@ -161,6 +162,10 @@ void CommandRecording::open_render(VectorView<RDD::AttachmentClear> p_clears) {
 	if (render && render_samples == samples) {
 		return;
 	}
+	// A live encoder here is changing sample count. An explicit clear view reopens the
+	// encoder ended by command_render_clear_attachments (ordinary opens pass no view).
+	const bool measure = webgpu_perf_stats.in_raf && webgpu_perf_is_enabled();
+	const bool restarting = measure && (render || p_clears.ptr() != nullptr);
 	end_render();
 	render_samples = samples;
 	end_compute();
@@ -245,6 +250,11 @@ void CommandRecording::open_render(VectorView<RDD::AttachmentClear> p_clears) {
 	desc.depthStencilAttachment = depth.view ? &depth : nullptr;
 	render.reset(wgpuCommandEncoderBeginRenderPass(encoder.get(), &desc));
 	ERR_FAIL_COND(!render);
+	if (measure) {
+		auto &work = webgpu_perf_stats.frame.work;
+		work.render_passes++;
+		work.render_pass_splits_other += restarting;
+	}
 	reset_encoder_state();
 	++render_scope_epoch;
 	DEV_ASSERT(render_scope_epoch != 0);
@@ -272,6 +282,9 @@ void CommandRecording::open_compute() {
 		DEV_ASSERT(!layout);
 		compute.reset(wgpuCommandEncoderBeginComputePass(encoder.get(), nullptr));
 		ERR_FAIL_COND(!compute);
+		if (webgpu_perf_stats.in_raf && webgpu_perf_is_enabled()) {
+			webgpu_perf_stats.frame.work.compute_passes++;
+		}
 		reset_encoder_state();
 		for (const auto &label : labels) {
 			wgpuComputePassEncoderPushDebugGroup(compute.get(), wg_string(label));
@@ -291,6 +304,11 @@ void CommandRecording::end_compute() {
 }
 
 void CommandRecording::outside_pass() {
+	// Interruptions leave the logical subpass open; even finish_subpass() must reopen it.
+	// Its ordinary final close goes straight to end_render() and is not a split.
+	if (render && webgpu_perf_stats.in_raf && webgpu_perf_is_enabled()) {
+		webgpu_perf_stats.frame.work.render_pass_splits_other++;
+	}
 	end_compute();
 	end_render();
 }

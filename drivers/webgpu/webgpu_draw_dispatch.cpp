@@ -1,4 +1,5 @@
 #include "webgpu_commands.h"
+#include "webgpu_perf_stats.h"
 
 using namespace godot::webgpu;
 
@@ -8,6 +9,12 @@ namespace {
 constexpr uint32_t DYNAMIC_FRAME_MASK = (1U << DYNAMIC_FRAME_BITS) - 1;
 static_assert(MAX_DRIVER_FRAMES >= 3 && MAX_DRIVER_FRAMES - 1 <= DYNAMIC_FRAME_MASK);
 static_assert(MAX_DRIVER_FRAMES - 1 < (1U << VERTEX_FRAME_BITS));
+
+void count_draws(uint32_t p_count) {
+	if (webgpu_perf_stats.in_raf && webgpu_perf_is_enabled()) {
+		webgpu_perf_stats.frame.work.draws += p_count;
+	}
+}
 
 void bind_sets(CommandRecording &r_cmd, VectorView<RDD::UniformSetID> p_sets, uint32_t p_first, uint32_t p_count, uint32_t p_dynamic_offsets) {
 	uint32_t shift = 0;
@@ -224,6 +231,9 @@ bool RenderingDeviceDriverWebGPU::prepare_dispatch(CommandRecording &r_cmd, bool
 			r_cmd.end_render();
 			r_cmd.open_render();
 			ERR_FAIL_COND_V(!r_cmd.render, false);
+			if (webgpu_perf_stats.in_raf && webgpu_perf_is_enabled()) {
+				webgpu_perf_stats.frame.work.render_pass_splits_alias++;
+			}
 		}
 		r_cmd.trim_render_slots(group_count, recipe.vertex_bindings.size(), state->limits.maxBindGroupsPlusVertexBuffers);
 		const auto handle = pipeline->render_variant(p_indexed ? r_cmd.index_format : WGPUIndexFormat_Undefined);
@@ -332,6 +342,7 @@ void RenderingDeviceDriverWebGPU::command_render_draw(CommandBufferID p_buffer, 
 	auto &cmd = recording(*state, p_buffer);
 	if (prepare_dispatch(cmd, false, false)) {
 		wgpuRenderPassEncoderDraw(cmd.render.get(), p_vertices, p_instances, p_first_vertex, p_first_instance);
+		count_draws(1);
 	}
 }
 
@@ -339,6 +350,7 @@ void RenderingDeviceDriverWebGPU::command_render_draw_indexed(CommandBufferID p_
 	auto &cmd = recording(*state, p_buffer);
 	if (prepare_dispatch(cmd, false, true)) {
 		wgpuRenderPassEncoderDrawIndexed(cmd.render.get(), p_indices, p_instances, p_first_index, p_vertex_offset, p_first_instance);
+		count_draws(1);
 	}
 }
 
@@ -349,6 +361,7 @@ void RenderingDeviceDriverWebGPU::command_render_draw_indexed_indirect(CommandBu
 		for (uint32_t i = 0; i < p_count; ++i) {
 			wgpuRenderPassEncoderDrawIndexedIndirect(cmd.render.get(), indirect->buffer.get(), p_offset + uint64_t(i) * p_stride);
 		}
+		count_draws(p_count);
 	}
 }
 
@@ -359,6 +372,7 @@ void RenderingDeviceDriverWebGPU::command_render_draw_indirect(CommandBufferID p
 		for (uint32_t i = 0; i < p_count; ++i) {
 			wgpuRenderPassEncoderDrawIndirect(cmd.render.get(), indirect->buffer.get(), p_offset + uint64_t(i) * p_stride);
 		}
+		count_draws(p_count);
 	}
 }
 
@@ -374,6 +388,9 @@ void RenderingDeviceDriverWebGPU::command_compute_dispatch(CommandBufferID p_buf
 	auto &cmd = recording(*state, p_buffer);
 	if (prepare_dispatch(cmd, true, false)) {
 		wgpuComputePassEncoderDispatchWorkgroups(cmd.compute.get(), p_x, p_y, p_z);
+		if (webgpu_perf_stats.in_raf && webgpu_perf_is_enabled()) {
+			webgpu_perf_stats.frame.work.dispatches++;
+		}
 	}
 }
 
@@ -382,5 +399,8 @@ void RenderingDeviceDriverWebGPU::command_compute_dispatch_indirect(CommandBuffe
 	const auto &indirect = resource<BufferResource>(p_indirect);
 	if (prepare_dispatch(cmd, true, false, indirect)) {
 		wgpuComputePassEncoderDispatchWorkgroupsIndirect(cmd.compute.get(), indirect->buffer.get(), p_offset);
+		if (webgpu_perf_stats.in_raf && webgpu_perf_is_enabled()) {
+			webgpu_perf_stats.frame.work.dispatches++;
+		}
 	}
 }

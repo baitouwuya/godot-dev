@@ -1099,7 +1099,7 @@ Error RenderingDevice::_buffer_update(Buffer *p_buffer, RID p_buffer_id, uint32_
 
 		memcpy(dst_data + p_offset, p_data, p_size);
 		direct_copy_count++;
-		buffer_flush(p_buffer_id);
+		driver->buffer_flush_range(p_buffer->driver_id, p_offset, p_size);
 		return OK;
 	}
 
@@ -1451,6 +1451,23 @@ void RenderingDevice::buffer_flush(RID p_buffer) {
 	Buffer *buffer = _get_buffer_from_owner(p_buffer);
 	ERR_FAIL_NULL_MSG(buffer, "Buffer argument is not a valid buffer of any type.");
 	driver->buffer_flush(buffer->driver_id);
+}
+
+Error RenderingDevice::buffer_flush_range(RID p_buffer, uint64_t p_offset, uint64_t p_size) {
+	ERR_RENDER_THREAD_GUARD_V(ERR_UNAVAILABLE);
+
+	Buffer *buffer = _get_buffer_from_owner(p_buffer);
+	ERR_FAIL_NULL_V_MSG(buffer, ERR_INVALID_PARAMETER, "Buffer argument is not a valid buffer of any type.");
+	ERR_FAIL_COND_V_MSG(!buffer->usage.has_flag(RDD::BUFFER_USAGE_DYNAMIC_PERSISTENT_BIT), ERR_INVALID_PARAMETER,
+			"Buffer must be created with BUFFER_CREATION_DYNAMIC_PERSISTENT_BIT.");
+	ERR_FAIL_COND_V_MSG(p_offset > buffer->size, ERR_INVALID_PARAMETER, "Buffer flush range starts past the end of the buffer.");
+
+	const uint64_t size = MIN(p_size, uint64_t(buffer->size) - p_offset);
+	if (size == 0) {
+		return OK;
+	}
+	driver->buffer_flush_range(buffer->driver_id, p_offset, size);
+	return OK;
 }
 
 RID RenderingDevice::storage_buffer_create(uint32_t p_size_bytes, Span<uint8_t> p_data, BitField<StorageBufferUsage> p_usage, BitField<BufferCreationBits> p_creation_bits) {
@@ -8420,6 +8437,12 @@ Error RenderingDevice::initialize(RenderingContextDriver *p_context, DisplayServ
 	device = context->device_get(device_index);
 	err = driver->initialize(device_index, frame_count);
 	ERR_FAIL_COND_V_MSG(err != OK, FAILED, "Failed to initialize driver for device.");
+	if (driver->get_api_name() == "WebGPU") {
+		// WebGPU maps all logical queues to one ordered WGPUQueue. Keeping the
+		// swapchain blit in a separate command buffer only adds a second submit and
+		// completion callback without providing queue overlap.
+		split_swapchain_into_its_own_cmd_buffer = false;
+	}
 
 	if (is_main_instance) {
 		// Only the singleton instance with a display should print this information.

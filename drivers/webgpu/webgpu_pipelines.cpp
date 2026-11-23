@@ -1,3 +1,4 @@
+#include "webgpu_perf_stats.h"
 #include "webgpu_shader_resources.h"
 
 #include <algorithm>
@@ -7,6 +8,66 @@ using namespace godot::webgpu;
 
 namespace godot::webgpu {
 namespace {
+
+template <typename Create>
+auto measure_pipeline_create(Create p_create, uint64_t &r_calls, double &r_ms) {
+	if (webgpu_perf_stats.in_raf && webgpu_perf_is_enabled()) {
+		const double start_ms = emscripten_get_now();
+		auto handle = p_create();
+		r_ms += emscripten_get_now() - start_ms;
+		r_calls++;
+		return handle;
+	}
+	return p_create();
+}
+
+// Forward+ packs its runtime features into u32 IDs 0 and 1. ID 2 stays
+// baked because its dead branches can reference Vulkan point builtins.
+std::optional<CompileOptions> scene_override_options(const PipelineResource &p_pipeline,
+		const CompileOptions &p_options) {
+	if (p_options.subgroup_lowering != SubgroupLowering::CLUSTERED_SCENE ||
+			p_pipeline.source->reflection.pipeline_type != Rdc::PIPELINE_TYPE_RASTERIZATION ||
+			!p_options.specialization.empty() || !p_pipeline.source->immutable.empty()) {
+		return std::nullopt;
+	}
+	CompileOptions options = p_options;
+	bool has_override = false;
+	for (const auto &value : p_pipeline.constants) {
+		if (value.constant_id == 2 && value.type == Rdc::PIPELINE_SPECIALIZATION_CONSTANT_TYPE_BOOL) {
+			options.specialization[2] = uint32_t(value.bool_value);
+		} else if (value.constant_id < 2 && value.type == Rdc::PIPELINE_SPECIALIZATION_CONSTANT_TYPE_INT) {
+			for (const auto &reflected : p_pipeline.source->reflection.specialization_constants) {
+				if (reflected.constant_id == value.constant_id) {
+					options.specialization[value.constant_id] = std::nullopt;
+					has_override = true;
+					break;
+				}
+			}
+		} else {
+			return std::nullopt;
+		}
+	}
+	return has_override ? std::optional(std::move(options)) : std::nullopt;
+}
+
+template <typename StageState>
+void set_scene_overrides(StageState &r_state, const StageOutput &p_stage,
+		const std::vector<Rdc::PipelineSpecializationConstant> &p_values, std::array<WGPUConstantEntry, 2> &r_entries) {
+	constexpr WGPUStringView keys[] = { { "0", 1 }, { "1", 1 } };
+	for (uint32_t id : p_stage.override_ids) {
+		DEV_ASSERT(id < std::size(keys) && r_state.constantCount < r_entries.size());
+		const auto value = std::find_if(p_values.rbegin(), p_values.rend(),
+				[id](const auto &p_value) { return p_value.constant_id == id; });
+		if (value != p_values.rend()) {
+			WGPUConstantEntry &entry = r_entries[r_state.constantCount++];
+			entry.key = keys[id];
+			entry.value = static_cast<double>(value->int_value);
+		}
+	}
+	if (r_state.constantCount) {
+		r_state.constants = r_entries.data();
+	}
+}
 
 WGPUPrimitiveTopology topology(Rdc::RenderPrimitive p_primitive) {
 	switch (p_primitive) {
@@ -171,7 +232,8 @@ RDD::PipelineID RenderingDeviceDriverWebGPU::compute_pipeline_create(ShaderID p_
 		desc.layout = p_shader.layout.get();
 		desc.compute.module = p_shader.modules[static_cast<size_t>(Stage::COMPUTE)].get();
 		desc.compute.entryPoint = wg_string(p_shader.stage(Stage::COMPUTE).entry_point);
-		r_variant.compute.reset(wgpuDeviceCreateComputePipeline(state->device.get(), &desc));
+		auto &work = webgpu_perf_stats.frame.work;
+		r_variant.compute.reset(measure_pipeline_create([&]() { return wgpuDeviceCreateComputePipeline(state->device.get(), &desc); }, work.compute_pso_calls, work.compute_pso_ms));
 		return bool(r_variant.compute);
 	};
 	return resource_id<PipelineID>(std::move(pipeline));
@@ -301,7 +363,10 @@ RDD::PipelineID RenderingDeviceDriverWebGPU::render_pipeline_create(ShaderID p_s
 		info.depthStencil = has_depth ? &depth : nullptr;
 		info.layout = p_shader.layout.get();
 		info.vertex.module = p_shader.modules[static_cast<size_t>(Stage::VERTEX)].get();
-		info.vertex.entryPoint = wg_string(p_shader.stage(Stage::VERTEX).entry_point);
+		const StageOutput &vertex = p_shader.stage(Stage::VERTEX);
+		info.vertex.entryPoint = wg_string(vertex.entry_point);
+		std::array<WGPUConstantEntry, 2> vertex_constants{};
+		set_scene_overrides(info.vertex, vertex, r_variant.constants, vertex_constants);
 		info.vertex.bufferCount = vertex_layouts.size();
 		info.vertex.buffers = vertex_layouts.data(); // Attribute arrays are owned by vertex_format.
 		auto color_targets = targets;
@@ -309,9 +374,12 @@ RDD::PipelineID RenderingDeviceDriverWebGPU::render_pipeline_create(ShaderID p_s
 			color_targets[i].blend = has_blend[i] ? &blends[i] : nullptr;
 		}
 		WGPUFragmentState fragment = WGPU_FRAGMENT_STATE_INIT;
+		std::array<WGPUConstantEntry, 2> fragment_constants{};
 		if (p_shader.modules[static_cast<size_t>(Stage::FRAGMENT)]) {
 			fragment.module = p_shader.modules[static_cast<size_t>(Stage::FRAGMENT)].get();
-			fragment.entryPoint = wg_string(p_shader.stage(Stage::FRAGMENT).entry_point);
+			const StageOutput &fragment_stage = p_shader.stage(Stage::FRAGMENT);
+			fragment.entryPoint = wg_string(fragment_stage.entry_point);
+			set_scene_overrides(fragment, fragment_stage, r_variant.constants, fragment_constants);
 			fragment.targetCount = color_targets.size();
 			fragment.targets = color_targets.data();
 			info.fragment = &fragment;
@@ -320,9 +388,10 @@ RDD::PipelineID RenderingDeviceDriverWebGPU::render_pipeline_create(ShaderID p_s
 		}
 		constexpr WGPUIndexFormat index_formats[] = { WGPUIndexFormat_Undefined, WGPUIndexFormat_Uint16, WGPUIndexFormat_Uint32 };
 		const uint32_t variant_count = r_variant.is_strip ? std::size(index_formats) : 1;
+		auto &work = webgpu_perf_stats.frame.work;
 		for (uint32_t i = 0; i < variant_count; ++i) {
 			info.primitive.stripIndexFormat = index_formats[i];
-			r_variant.raster[i].reset(wgpuDeviceCreateRenderPipeline(state->device.get(), &info));
+			r_variant.raster[i].reset(measure_pipeline_create([&]() { return wgpuDeviceCreateRenderPipeline(state->device.get(), &info); }, work.render_pso_calls, work.render_pso_ms));
 			ERR_FAIL_COND_V(!r_variant.raster[i], false);
 		}
 		return true;
@@ -362,8 +431,30 @@ std::shared_ptr<PipelineResource> RenderingDeviceDriverWebGPU::materialize_pipel
 			}
 		}
 	}
-	const auto variant = realize_shader(r_pipeline.source, VectorView<PipelineSpecializationConstant>(r_pipeline.constants.data(), r_pipeline.constants.size()),
-			overrides ? *overrides : r_pipeline.source->options);
+	const CompileOptions &options = overrides ? *overrides : r_pipeline.source->options;
+	std::shared_ptr<ShaderVariant> variant;
+	if (auto candidate = scene_override_options(r_pipeline, options)) {
+		const CompileKey key(*candidate);
+		if (const auto cached = r_pipeline.source->variants.find(key); cached != r_pipeline.source->variants.end()) {
+			variant = cached->second;
+		} else {
+			// Probe the CPU plan without reporting a shader error if specialization
+			// still needs to be frozen. Keep that work in the shader timing counter.
+			const bool timed = webgpu_perf_stats.in_raf && webgpu_perf_is_enabled();
+			const double start = timed ? emscripten_get_now() : 0.0;
+			const auto prepared = r_pipeline.source->source->prepare(key.options);
+			if (timed) {
+				webgpu_perf_stats.frame.work.shader_module_ms += emscripten_get_now() - start;
+			}
+			if (prepared->plan.ok()) {
+				variant = realize_shader(r_pipeline.source, {}, key.options);
+			}
+		}
+	}
+	if (!variant) {
+		const VectorView<PipelineSpecializationConstant> constants(r_pipeline.constants.data(), r_pipeline.constants.size());
+		variant = realize_shader(r_pipeline.source, constants, options);
+	}
 	if (!variant) {
 		return {};
 	}
@@ -375,6 +466,12 @@ std::shared_ptr<PipelineResource> RenderingDeviceDriverWebGPU::materialize_pipel
 		gpu->vertex_bindings = r_pipeline.vertex_bindings;
 		gpu->is_strip = r_pipeline.is_strip;
 		gpu->label = r_pipeline.label;
+		// Each recipe owns its own constants and GPU pipelines even when the
+		// realized shader module is shared by several recipes.
+		if (std::any_of(variant->prepared->plan.stages.begin(), variant->prepared->plan.stages.end(),
+					[](const auto &p_stage) { return !p_stage.override_ids.empty(); })) {
+			gpu->constants = r_pipeline.constants;
+		}
 		ERR_FAIL_COND_V(!r_pipeline.create(*gpu, *variant), {});
 		it = r_pipeline.variants.emplace(key, std::move(gpu)).first;
 	}

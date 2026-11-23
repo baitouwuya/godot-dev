@@ -1,4 +1,5 @@
 #include "rendering_device_driver_webgpu.h"
+#include "webgpu_perf_stats.h"
 
 #include <algorithm>
 #include <cstring>
@@ -251,6 +252,9 @@ RDD::TextureID RenderingDeviceDriverWebGPU::texture_create(const TextureFormat &
 		ERR_FAIL_COND_V(!desc.usage, {});
 		backing->texture.reset(wgpuDeviceCreateTexture(state->device.get(), &desc));
 		ERR_FAIL_COND_V(!backing->texture, {});
+		if (webgpu_perf_is_enabled() && webgpu_perf_stats.in_raf) {
+			webgpu_perf_stats.frame.work.texture_creates++;
+		}
 	}
 	auto texture = std::make_shared<TextureResource>();
 	texture->backing = std::move(backing);
