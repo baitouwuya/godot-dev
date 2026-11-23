@@ -327,11 +327,17 @@ const Preloader = /** @constructor */ function () { // eslint-disable-line no-un
 		let total = 0;
 		let totalIsValid = true;
 		let progressIsFinal = true;
+		let knownLoaded = 0;
+		let knownTotal = 0;
 
 		Object.keys(loadingFiles).forEach(function (file) {
 			const stat = loadingFiles[file];
 			if (!stat.done) {
 				progressIsFinal = false;
+			}
+			if (stat.total > 0) {
+				knownLoaded += stat.loaded;
+				knownTotal += stat.total;
 			}
 			if (!totalIsValid || stat.total === 0) {
 				totalIsValid = false;
@@ -341,6 +347,10 @@ const Preloader = /** @constructor */ function () { // eslint-disable-line no-un
 			}
 			loaded += stat.loaded;
 		});
+		if (!totalIsValid && knownTotal > 0) {
+			loaded = knownLoaded;
+			total = knownTotal;
+		}
 		if (loaded !== lastProgress.loaded || total !== lastProgress.total) {
 			lastProgress.loaded = loaded;
 			lastProgress.total = total;
@@ -365,13 +375,17 @@ const Preloader = /** @constructor */ function () { // eslint-disable-line no-un
 		scheduleProgress();
 	};
 
+	this.getFileStatus = function (file) {
+		return loadingFiles[file] || null;
+	};
+
 	this.loadPromise = function (file, fileSize, raw = false) {
 		scheduleProgress();
 		return retry(loadFetch.bind(null, file, loadingFiles, fileSize, raw), DOWNLOAD_ATTEMPTS_MAX);
 	};
 
 	this.loadPack = async function (path, progressive) {
-		const status = { total: 0, loaded: 0, done: false };
+		const status = { total: 0, loaded: 0, done: false, streamed: true };
 		loadingFiles[path] = status;
 		scheduleProgress();
 		const controller = new AbortController();

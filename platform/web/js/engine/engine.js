@@ -33,17 +33,61 @@ const Engine = (function () {
 		this.packStream = null;
 		this.progress = 0;
 		this.progressLabel = '';
+		this.progressPhase = '';
+		this.progressBytesLoaded = 0;
+		this.progressBytesTotal = 0;
+		this.wasmFile = '';
+		this.packFile = '';
 		this.rejectStartup = null;
 	}
 
-	function reportProgress(engine, ratio, label) {
+	function inferPhase(ratio, label) {
+		const text = (label || '').toLowerCase();
+		if (text.includes('ready') || ratio >= 0.999) {
+			return 'ready';
+		}
+		if (text.includes('first frame') || text.includes('pipeline')) {
+			return 'pipelines';
+		}
+		if (text.includes('scene') || text.includes('resident')) {
+			return 'scene';
+		}
+		if (text.includes('shader') || text.includes('initializing renderer')) {
+			return 'engine';
+		}
+		if (text.includes('browser renderer') || text.includes('webgpu')) {
+			return 'renderer';
+		}
+		if (text.includes('stream')) {
+			return 'pack_stream';
+		}
+		if (text.includes('pack') || text.includes('project')) {
+			return 'pack';
+		}
+		return ratio < 0.25 ? 'wasm' : 'engine';
+	}
+
+	function reportProgress(engine, ratio, label, phase, bytesLoaded, bytesTotal) {
 		const current = Math.max(engine.progress, Math.min(10000, Math.round(ratio * 10000)));
-		if (current === engine.progress && label === engine.progressLabel) {
+		const resolvedPhase = phase || inferPhase(current / 10000, label);
+		const loadedBytes = bytesLoaded || 0;
+		const totalBytes = bytesTotal || 0;
+		if (current === engine.progress && label === engine.progressLabel && resolvedPhase === engine.progressPhase
+			&& loadedBytes === engine.progressBytesLoaded && totalBytes === engine.progressBytesTotal) {
 			return;
 		}
 		engine.progress = current;
 		engine.progressLabel = label;
-		window['godotStartupStatus'] = { 'ratio': current / 10000, 'label': label };
+		engine.progressPhase = resolvedPhase;
+		engine.progressBytesLoaded = loadedBytes;
+		engine.progressBytesTotal = totalBytes;
+		window['godotStartupStatus'] = {
+			'ratio': current / 10000,
+			'label': label,
+			'phase': resolvedPhase,
+			'bytesLoaded': loadedBytes,
+			'bytesTotal': totalBytes,
+		};
 		if (typeof engine.config.onProgress === 'function') {
 			try {
 				engine.config.onProgress(current, 10000);
@@ -106,6 +150,9 @@ const Engine = (function () {
 					}
 					Engine.load(basePath, this.config.fileSizes[`${basePath}.wasm`]);
 				}
+				if (!this.wasmFile && loadPath) {
+					this.wasmFile = `${loadPath}.wasm`;
+				}
 				const me = this;
 				function doInit(promise) {
 					// Care! Promise chaining is bogus with old emscripten versions.
@@ -127,6 +174,9 @@ const Engine = (function () {
 								if (me.config.unloadAfterInit) {
 									Engine.unload();
 								}
+								if (me.progress < 2600) {
+									reportProgress(me, 0.26, 'Analyzing project pack index...', 'wasm_init', 0, 0);
+								}
 								resolve();
 							});
 						}).catch(onFailure);
@@ -134,9 +184,25 @@ const Engine = (function () {
 				}
 				preloader.setProgressFunc(function (loaded, total) {
 					// Do not display network progress after initialization stages begin.
-					if (me.progress < 5000) {
-						reportProgress(me, total > 0 ? Math.min(0.4999, 0.5 * loaded / total) : 0, 'Downloading engine and project...');
+					if (me.progress >= 5000) {
+						return;
 					}
+					const wasmStat = me.wasmFile ? preloader.getFileStatus(me.wasmFile) : null;
+					const packStat = me.packFile ? preloader.getFileStatus(me.packFile) : null;
+					if (wasmStat) {
+						if (!wasmStat.done) {
+							const wasmRatio = wasmStat.total > 0 ? Math.min(1, wasmStat.loaded / wasmStat.total) : 0;
+							reportProgress(me, wasmRatio * 0.24, 'Downloading engine core...', 'wasm', wasmStat.loaded, wasmStat.total);
+						} else if (packStat && packStat.total > 0) {
+							const packRatio = Math.min(1, packStat.loaded / packStat.total);
+							const streamed = !!packStat.streamed;
+							reportProgress(me, 0.26 + packRatio * 0.24, streamed ? 'Streaming boot assets...' : 'Downloading project pack...', streamed ? 'pack_stream' : 'pack', packStat.loaded, packStat.total);
+						} else {
+							reportProgress(me, 0.25, 'Compiling WebAssembly runtime...', 'wasm_init', 0, 0);
+						}
+						return;
+					}
+					reportProgress(me, total > 0 ? Math.min(0.4999, 0.5 * loaded / total) : 0, 'Downloading engine and project...', 'pack', loaded, total);
 				});
 				initPromise = doInit(loadPromise);
 				return initPromise;
@@ -182,10 +248,11 @@ const Engine = (function () {
 						return Promise.reject(new Error('The engine must be initialized before it can be started'));
 					}
 
-					reportProgress(me, 0.5, 'Preparing browser renderer...');
+					reportProgress(me, 0.52, 'Preparing browser renderer...', 'renderer', 0, 0);
 					const rendering = await me.config.negotiateRendering(me.rtenv['godotRenderingDrivers']);
 					me.renderingBackend = rendering.state;
 					window['godotRenderingBackend'] = rendering.state;
+					reportProgress(me, 0.54, 'Starting engine runtime...', 'renderer', 0, 0);
 					if (rendering.device) {
 						me.rtenv['preinitializedWebGPUDevice'] = rendering.device;
 						rendering.state['uncapturedErrors'] = [];
@@ -275,6 +342,8 @@ const Engine = (function () {
 				// Add main-pack argument.
 				const exe = this.config.executable;
 				const pack = this.config.mainPack || `${exe}.pck`;
+				this.wasmFile = `${exe}.wasm`;
+				this.packFile = pack;
 				const me = this;
 				const initialized = this.init(exe);
 				const loaded = (async function () {
